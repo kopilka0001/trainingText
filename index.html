@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Тренажёр заучивания</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Тренажёр заучивания: по одному слову</h1>
+
+        <!-- Экран 1: Ввод текста -->
+        <div id="inputScreen" class="screen">
+            <textarea id="userText" rows="8" placeholder="Вставь сюда стих..."></textarea>
+            
+            <!-- Добавленное поле для даты -->
+            <div class="date-input">
+                <label for="examDate">Дата сдачи:</label>
+                <input type="date" id="examDate" required>
+            </div>
+          
+
+            
+            <button id="startBtn">Начать учить</button>
+        </div>
+
+        <!-- Экран 2: Первое полное чтение -->
+        <div id="readOnceScreen" class="screen hidden">
+            <h2>Прочитай текст полностью</h2>
+            <div id="fullTextDisplay" class="text-box"></div>
+            <button id="readOnceBtn">Готово, дальше</button>
+        </div>
+
+        <!-- Экран 3: Тренажёр -->
+        <div id="trainingScreen" class="screen hidden">
+            <h2>Тренировка</h2>
+            <p>На каждом шаге исчезает <b>последнее слово</b> в каждой строке. Читай и жми «Далее». Если сложно — «Назад».</p>
+            <div id="trainingTextDisplay" class="text-box"></div>
+            <div class="controls">
+                <button id="backBtn" disabled>← Назад</button>
+                <button id="nextBtn">Далее →</button>
+            </div>
+            <p id="statusMessage" class="status"></p>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

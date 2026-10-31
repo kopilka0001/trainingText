@@ -1,0 +1,98 @@
+    body {
+  font-family: Arial, sans-serif;
+  background-color: #f4f4f9;
+  display: flex;
+  justify-content: center;
+}
+.container {
+  width: 100%;
+  max-width: 600px;
+  padding: 20px;
+}
+textarea {
+  width: 100%;
+  padding: 15px;
+  border: 2px solid #ccc;
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+button {
+  background-color: #007bff;
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  margin-top: 10px;
+}
+button:hover:not(:disabled) {
+  background-color: #0056b3;
+}
+button:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+.hidden {
+  display: none;
+}
+.text-box {
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  min-height: 140px;
+  margin: 20px 0;
+  border: 1px solid #ddd;
+  font-size: 18px;
+  font-weight: normal;
+}
+.controls {
+  display: flex;
+  gap: 10px;
+}
+.status {
+  margin-top: 15px;
+  font-weight: bold;
+  text-align: center;
+}
+/* Стиль скрытого слова: пунктир снизу */
+.hidden-word {
+  color: transparent;
+  border-bottom: 2px dashed #ccc;
+  letter-spacing: 4px;
+  display: inline-block;
+  width: auto;
+}
+
+/* Стили для поля даты */
+.date-input {
+    margin: 15px 0;
+}
+
+.date-input label {
+    display: block;
+    margin-bottom: 5px;
+}
+
+.date-input input {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+.calendar-message {
+    margin-top: 15px;
+    padding: 10px;
+    background-color: #e7f3ff;
+    border-radius: 5px;
+    font-size: 14px;
+}
+.download-button {
+    margin-top: 10px;
+    background-color: #28a745;
+}
+
+
