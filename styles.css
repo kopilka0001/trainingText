@@ -120,3 +120,7 @@ button:disabled {
   border-radius: 8px;
   font-size: 14px;
 }
+
+.install-hint {
+  margin-top: 15px;
+}
