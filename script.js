@@ -25,6 +25,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Определяем платформу
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
 
+  // Адрес страницы импорта/экспорта Google Календаря
+  const GCAL_IMPORT_URL = 'https://calendar.google.com/calendar/u/0/r/settings/export';
+
   // Экранирование HTML-символов в тексте пользователя
   function escapeHtml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -62,6 +65,17 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/;/g, '\\;')
       .replace(/,/g, '\\,')
       .replace(/\r?\n/g, '\\n');
+  }
+
+  // Скачивание .ics файла (используется несколькими кнопками)
+  function downloadIcs(url) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'training-schedule.ics';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
   // Ссылка-шаблон события для Google Календаря
@@ -264,20 +278,23 @@ document.addEventListener('DOMContentLoaded', () => {
       ? '📥 Добавить все тренировки в Календарь'
       : '📥 Скачать календарь тренировок';
     downloadButton.classList.add('download-button');
-    downloadButton.onclick = () => {
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'training-schedule.ics';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-    };
+    downloadButton.onclick = () => downloadIcs(url);
     offer.appendChild(downloadButton);
 
-    // Блок 2: ссылки на Google Календарь — только НЕ на iPhone
-    // (на айфонах Google Календарь обычно не установлен, а системный
-    // Календарь и так принимает файл через Safari)
+    // Кнопка 2 (только не на iPhone): скачать файл и сразу открыть
+    // страницу импорта/экспорта Google Календаря
+    if (!isIOS) {
+      const importButton = document.createElement('button');
+      importButton.textContent = '🌐 Импорт через сайт Google Календаря';
+      importButton.classList.add('download-button');
+      importButton.onclick = () => {
+        downloadIcs(url);
+        window.open(GCAL_IMPORT_URL, '_blank');
+      };
+      offer.appendChild(importButton);
+    }
+
+    // Блок 3: ссылки на Google Календарь по одному — запасной путь, только не на iPhone
     if (!isIOS) {
       const details = document.createElement('details');
       details.className = 'gcal-details';
