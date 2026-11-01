@@ -1,4 +1,4 @@
-    body {
+body {
   font-family: Arial, sans-serif;
   background-color: #f4f4f9;
   display: flex;
@@ -68,34 +68,43 @@ button:disabled {
 
 /* Стили для поля даты */
 .date-input {
-    margin: 15px 0;
+  margin: 15px 0;
 }
-
 .date-input label {
-    display: block;
-    margin-bottom: 5px;
+  display: block;
+  margin-bottom: 5px;
 }
-
 .date-input input {
-    width: 100%;
-    padding: 8px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
 }
 
 .calendar-message {
-    margin-top: 15px;
-    padding: 10px;
-    background-color: #e7f3ff;
-    border-radius: 5px;
-    font-size: 14px;
+  margin-top: 15px;
+  padding: 10px;
+  background-color: #e7f3ff;
+  border-radius: 5px;
+  font-size: 14px;
 }
 .download-button {
-    margin-top: 10px;
+  margin-top: 10px;
+  background-color: #28a745;
+}
 
+/* Свёрнутый блок ссылок на Google Календарь */
+.gcal-details {
+  margin-top: 10px;
+}
+.gcal-details summary {
+  cursor: pointer;
+  color: #4a90d9;
+  font-weight: bold;
+}
 .gcal-link {
   display: block;
-  margin: 4px 0;
+  margin: 6px 0 0 4px;
   color: #4a90d9;
   text-decoration: none;
 }
@@ -103,7 +112,11 @@ button:disabled {
   text-decoration: underline;
 }
 
-    background-color: #28a745;
+/* Баннер напоминания о тренировке сегодня */
+.today-reminder {
+  margin-bottom: 15px;
+  padding: 12px;
+  background-color: #fff3cd;
+  border-radius: 8px;
+  font-size: 14px;
 }
-
-
