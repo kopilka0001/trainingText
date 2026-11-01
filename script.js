@@ -22,6 +22,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let history = [];
   let stepIndex = 0;
 
+  // Определяем платформу
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+
   // Экранирование HTML-символов в тексте пользователя
   function escapeHtml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -99,7 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return ics;
   }
 
-  // Составление расписания и показ предложения скачать календарь
+  // Составление расписания повторений
   function buildSchedule(examDate) {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -223,7 +226,6 @@ document.addEventListener('DOMContentLoaded', () => {
           });
         } else {
           // Своя подсказка: как установить вручную
-          const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
           alert(isIOS
             ? 'На iPhone: нажмите кнопку «Поделиться» внизу Safari и выберите «На экран “Домой”».'
             : 'На Android: откройте меню браузера (три точки справа вверху) и выберите «Установить приложение» или «Добавить на главный экран».');
@@ -247,15 +249,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const offer = document.createElement('div');
     offer.id = 'calendarOffer';
 
+    // Текст подсказки зависит от платформы
     offer.innerHTML =
       '<p class="calendar-message">📅 Схема повторений рассчитана: ' +
       events.length + ' тренировок за ' + (daysUntilExam <= 1 ? '1 день' : daysUntilExam + ' дн.') +
-      '.<br>Скачайте файл и добавьте его в календарь телефона — придут напоминания.</p>';
+      '.<br>' + (isIOS
+        ? 'Скачайте файл — Safari сам предложит добавить <b>все тренировки сразу</b> в Календарь.'
+        : 'Скачайте файл и откройте его — календарь добавит <b>все тренировки сразу</b>.') +
+      '</p>';
 
-    // Кнопка 1: скачать .ics — работает везде
-    // (на iPhone Safari сам предложит «Добавить все в Календарь»)
+    // Кнопка 1: скачать .ics — главный путь на обеих платформах
     const downloadButton = document.createElement('button');
-    downloadButton.textContent = '📥 Скачать календарь тренировок';
+    downloadButton.textContent = isIOS
+      ? '📥 Добавить все тренировки в Календарь'
+      : '📥 Скачать календарь тренировок';
     downloadButton.classList.add('download-button');
     downloadButton.onclick = () => {
       const a = document.createElement('a');
@@ -268,36 +275,40 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     offer.appendChild(downloadButton);
 
-    // Блок 2: ссылки на Google Календарь, свёрнутые в <details>,
-    // чтобы при длинной схеме не растягивать экран
-    const details = document.createElement('details');
-    details.className = 'gcal-details';
+    // Блок 2: ссылки на Google Календарь — только НЕ на iPhone
+    // (на айфонах Google Календарь обычно не установлен, а системный
+    // Календарь и так принимает файл через Safari)
+    if (!isIOS) {
+      const details = document.createElement('details');
+      details.className = 'gcal-details';
 
-    const summary = document.createElement('summary');
-    summary.textContent = '➕ Добавить по одному в Google Календарь (' + events.length + ')';
-    details.appendChild(summary);
+      const summary = document.createElement('summary');
+      summary.textContent = '➕ Добавить по одному в Google Календарь (' + events.length + ')';
+      details.appendChild(summary);
 
-    events.forEach((event, index) => {
-      const link = document.createElement('a');
-      link.href = buildGoogleCalendarLink(event);
-      link.target = '_blank';
-      link.rel = 'noopener';
-      link.className = 'gcal-link';
+      events.forEach((event, index) => {
+        const link = document.createElement('a');
+        link.href = buildGoogleCalendarLink(event);
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.className = 'gcal-link';
 
-      // Понятная подпись: дата и суть тренировки
-      const d = event.start;
-      const day = String(d.getDate()).padStart(2, '0');
-      const month = String(d.getMonth() + 1).padStart(2, '0');
-      const hours = String(d.getHours()).padStart(2, '0');
-      const minutes = String(d.getMinutes()).padStart(2, '0');
-      link.textContent = 'Тренировка №' + (index + 1) + ' — ' +
-        day + '.' + month + ' в ' + hours + ':' + minutes;
+        // Понятная подпись: дата и время тренировки
+        const d = event.start;
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const hours = String(d.getHours()).padStart(2, '0');
+        const minutes = String(d.getMinutes()).padStart(2, '0');
+        link.textContent = 'Тренировка №' + (index + 1) + ' — ' +
+          day + '.' + month + ' в ' + hours + ':' + minutes;
 
-      details.appendChild(link);
-      details.appendChild(document.createElement('br'));
-    });
+        details.appendChild(link);
+        details.appendChild(document.createElement('br'));
+      });
 
-    offer.appendChild(details);
+      offer.appendChild(details);
+    }
+
     // Предложение показываем на экране первого чтения
     readOnceScreen.prepend(offer);
   }
