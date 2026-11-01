@@ -52,6 +52,17 @@ document.addEventListener('DOMContentLoaded', () => {
     return d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
   }
 
+  // Ссылка-шаблон события для Google Календаря
+  function buildGoogleCalendarLink(event) {
+    const params = new URLSearchParams({
+      action: 'TEMPLATE',
+      text: 'Тренировка: заучивание стиха',
+      dates: icsDateTime(event.start) + '/' + icsDateTime(event.end),
+      details: event.description
+    });
+    return 'https://calendar.google.com/calendar/render?' + params.toString();
+  }
+
   // Генерация содержимого ICS файла
   function generateICS(events) {
     let ics = 'BEGIN:VCALENDAR\r\n';
@@ -99,7 +110,7 @@ document.addEventListener('DOMContentLoaded', () => {
         events.push({ start, end, description: 'Экстренная схема: ' + labels[index] });
       });
     } else {
-      // Стандартная схема по дняам
+      // Стандартная схема по дням
       const intervals = calculateIntervals(daysUntilExam);
       let dayOffset = 0;
       intervals.forEach((interval, index) => {
@@ -136,11 +147,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const offer = document.createElement('div');
     offer.id = 'calendarOffer';
+
     offer.innerHTML =
       '<p class="calendar-message">📅 Схема повторений рассчитана: ' +
       events.length + ' тренировок за ' + (daysUntilExam <= 1 ? '1 день' : daysUntilExam + ' дн.') +
       '.<br>Скачайте файл и добавьте его в календарь телефона — придут напоминания.</p>';
 
+    // Кнопка 1: скачать .ics — работает везде
+    // (на iPhone Safari сам предложит «Добавить все в Календарь»)
     const downloadButton = document.createElement('button');
     downloadButton.textContent = '📥 Скачать календарь тренировок';
     downloadButton.classList.add('download-button');
@@ -153,8 +167,38 @@ document.addEventListener('DOMContentLoaded', () => {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     };
-
     offer.appendChild(downloadButton);
+
+    // Блок 2: ссылки на Google Календарь, свёрнутые в <details>,
+    // чтобы при длинной схеме не растягивать экран
+    const details = document.createElement('details');
+    details.className = 'gcal-details';
+
+    const summary = document.createElement('summary');
+    summary.textContent = '➕ Добавить по одному в Google Календарь (' + events.length + ')';
+    details.appendChild(summary);
+
+    events.forEach((event, index) => {
+      const link = document.createElement('a');
+      link.href = buildGoogleCalendarLink(event);
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.className = 'gcal-link';
+
+      // Понятная подпись: дата и суть тренировки
+      const d = event.start;
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const hours = String(d.getHours()).padStart(2, '0');
+      const minutes = String(d.getMinutes()).padStart(2, '0');
+      link.textContent = 'Тренировка №' + (index + 1) + ' — ' +
+        day + '.' + month + ' в ' + hours + ':' + minutes;
+
+      details.appendChild(link);
+      details.appendChild(document.createElement('br'));
+    });
+
+    offer.appendChild(details);
     // Предложение показываем на экране первого чтения
     readOnceScreen.prepend(offer);
   }
