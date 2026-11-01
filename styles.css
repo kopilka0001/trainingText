@@ -92,6 +92,17 @@ button:disabled {
 }
 .download-button {
     margin-top: 10px;
+
+.gcal-link {
+  display: block;
+  margin: 4px 0;
+  color: #4a90d9;
+  text-decoration: none;
+}
+.gcal-link:hover {
+  text-decoration: underline;
+}
+
     background-color: #28a745;
 }
 
