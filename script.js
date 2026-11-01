@@ -136,6 +136,96 @@ document.addEventListener('DOMContentLoaded', () => {
     return { events, daysUntilExam };
   }
 
+  // --- Напоминание при открытии приложения ---
+  const STORAGE_KEY = 'trainingSchedule';
+
+  function saveSchedule(events) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(
+      events.map(e => ({ start: e.start.toISOString(), description: e.description }))
+    ));
+  }
+
+  function showTodayReminder() {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+
+    let events;
+    try { events = JSON.parse(raw); } catch (e) { return; }
+
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
+
+    const todayEvents = events.filter(e => {
+      const t = new Date(e.start);
+      return t >= startOfToday && t < endOfToday;
+    });
+    if (todayEvents.length === 0) return;
+
+    const banner = document.createElement('div');
+    banner.className = 'today-reminder';
+    banner.innerHTML = '<p>📅 Сегодня по плану: ' +
+      escapeHtml(todayEvents[0].description) +
+      (todayEvents.length > 1 ? ' (и ещё ' + (todayEvents.length - 1) + ')' : '') +
+      '. Открой экран тренировки и повтори стих!</p>';
+    inputScreen.prepend(banner);
+  }
+
+  showTodayReminder();
+
+  // --- Кнопка «Установить приложение» (замена пропавшего баннера Chrome) ---
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true;
+
+  if (!isStandalone) {
+    let deferredPrompt = null;
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      showInstallButton();
+    });
+
+    // Если браузер не дал своё событие, показываем кнопку с подсказкой
+    setTimeout(() => {
+      if (!deferredPrompt && !document.getElementById('installHint')) {
+        showInstallButton();
+      }
+    }, 1500);
+
+    function showInstallButton() {
+      if (document.getElementById('installHint')) return;
+
+      const hint = document.createElement('div');
+      hint.id = 'installHint';
+      hint.className = 'install-hint';
+
+      const button = document.createElement('button');
+      button.textContent = '📲 Установить приложение';
+      button.classList.add('download-button');
+
+      button.onclick = () => {
+        if (deferredPrompt) {
+          // Браузер поддерживает установку — показываем системный диалог
+          deferredPrompt.prompt();
+          deferredPrompt.userChoice.finally(() => {
+            deferredPrompt = null;
+            hint.remove();
+          });
+        } else {
+          // Своя подсказка: как установить вручную
+          const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+          alert(isIOS
+            ? 'На iPhone: нажмите кнопку «Поделиться» внизу Safari и выберите «На экран “Домой”».'
+            : 'На Android: откройте меню браузера (три точки справа вверху) и выберите «Установить приложение» или «Добавить на главный экран».');
+        }
+      };
+
+      hint.appendChild(button);
+      inputScreen.appendChild(hint);
+    }
+  }
+
   function showDownloadOffer(events, daysUntilExam) {
     // Удаляем старое сообщение и кнопку, если есть
     const oldOffer = document.getElementById('calendarOffer');
@@ -230,6 +320,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Схема повторений + предложение скачать календарь
     const { events, daysUntilExam } = buildSchedule(examDate);
     showDownloadOffer(events, daysUntilExam);
+    saveSchedule(events); // запоминаем расписание для напоминаний при открытии
 
     // Разбиваем на строки
     originalLines = text.split('\n').filter(line => line.trim() !== '');
@@ -323,6 +414,20 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+// Регистрация сервис-воркера и автообновление приложения
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
+
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return;
+    refreshing = true;
+    // Новый воркер активировался — перезагружаем страницу, чтобы показать свежую версию
+    window.location.reload();
+  });
+
+  // Проверяем обновления при каждом открытии приложения
+  navigator.serviceWorker.ready.then((reg) => {
+    reg.update().catch(() => {});
+  });
 }
