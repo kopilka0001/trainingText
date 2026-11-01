@@ -22,6 +22,11 @@ document.addEventListener('DOMContentLoaded', () => {
   let history = [];
   let stepIndex = 0;
 
+  // Экранирование HTML-символов в тексте пользователя
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
   // Расчет интервалов повторения (в днях)
   function calculateIntervals(daysUntilExam) {
     const intervals = [];
@@ -60,12 +65,12 @@ document.addEventListener('DOMContentLoaded', () => {
       ics += 'DTSTAMP:' + icsDateTime(new Date()) + '\r\n';
       ics += 'DTSTART:' + icsDateTime(event.start) + '\r\n';
       ics += 'DTEND:' + icsDateTime(event.end) + '\r\n';
-      ics += 'SUMMARY:Тренировка №' + (index + 1) + ' — заучивание стиха\r\n';
-      ics += 'DESCRIPTION:' + event.description + '\r\n';
+      ics += 'SUMMARY:' + encodeURIComponent('Тренировка №' + (index + 1) + ' — заучивание стиха') + '\r\n';
+      ics += 'DESCRIPTION:' + encodeURIComponent(event.description) + '\r\n';
       ics += 'BEGIN:VALARM\r\n';
       ics += 'TRIGGER:-PT15M\r\n';
       ics += 'ACTION:DISPLAY\r\n';
-      ics += 'DESCRIPTION:Пора повторять стих!\r\n';
+      ics += 'DESCRIPTION:' + encodeURIComponent('Пора повторять стих!') + '\r\n';
       ics += 'END:VALARM\r\n';
       ics += 'END:VEVENT\r\n';
     });
@@ -94,7 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
         events.push({ start, end, description: 'Экстренная схема: ' + labels[index] });
       });
     } else {
-      // Стандартная схема по дням
+      // Стандартная схема по дняам
       const intervals = calculateIntervals(daysUntilExam);
       let dayOffset = 0;
       intervals.forEach((interval, index) => {
@@ -146,6 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.body.appendChild(a);
       a.click();
       a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
     };
 
     offer.appendChild(downloadButton);
@@ -170,6 +176,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const examDate = new Date(dateValue + 'T00:00:00');
     if (isNaN(examDate)) {
       alert('Некорректная дата!');
+      return;
+    }
+    if (examDate < new Date(new Date().setHours(0, 0, 0, 0))) {
+      alert('Дата сдачи уже прошла!');
       return;
     }
 
@@ -247,9 +257,9 @@ document.addEventListener('DOMContentLoaded', () => {
       for (let j = 0; j < words.length; j++) {
         const fromEnd = words.length - j;
         if (fromEnd <= hideCount) {
-          result += '<span class="hidden-word">' + words[j] + '</span>';
+          result += '<span class="hidden-word">' + escapeHtml(words[j]) + '</span>';
         } else {
-          result += words[j];
+          result += escapeHtml(words[j]);
         }
         if (j < words.length - 1) result += ' ';
       }
@@ -268,6 +278,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return true;
   }
 });
+
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
