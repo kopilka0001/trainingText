@@ -52,6 +52,15 @@ document.addEventListener('DOMContentLoaded', () => {
     return d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
   }
 
+  // Экранирование спецсимволов по стандарту ICS (RFC 5545)
+  function escapeICS(text) {
+    return text
+      .replace(/\\/g, '\\\\')
+      .replace(/;/g, '\\;')
+      .replace(/,/g, '\\,')
+      .replace(/\r?\n/g, '\\n');
+  }
+
   // Ссылка-шаблон события для Google Календаря
   function buildGoogleCalendarLink(event) {
     const params = new URLSearchParams({
@@ -76,12 +85,12 @@ document.addEventListener('DOMContentLoaded', () => {
       ics += 'DTSTAMP:' + icsDateTime(new Date()) + '\r\n';
       ics += 'DTSTART:' + icsDateTime(event.start) + '\r\n';
       ics += 'DTEND:' + icsDateTime(event.end) + '\r\n';
-      ics += 'SUMMARY:' + encodeURIComponent('Тренировка №' + (index + 1) + ' — заучивание стиха') + '\r\n';
-      ics += 'DESCRIPTION:' + encodeURIComponent(event.description) + '\r\n';
+      ics += 'SUMMARY:' + escapeICS('Тренировка №' + (index + 1) + ' — заучивание стиха') + '\r\n';
+      ics += 'DESCRIPTION:' + escapeICS(event.description) + '\r\n';
       ics += 'BEGIN:VALARM\r\n';
       ics += 'TRIGGER:-PT15M\r\n';
       ics += 'ACTION:DISPLAY\r\n';
-      ics += 'DESCRIPTION:' + encodeURIComponent('Пора повторять стих!') + '\r\n';
+      ics += 'DESCRIPTION:' + escapeICS('Пора повторять стих!') + '\r\n';
       ics += 'END:VALARM\r\n';
       ics += 'END:VEVENT\r\n';
     });
