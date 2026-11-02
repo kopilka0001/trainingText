@@ -124,3 +124,38 @@ button:disabled {
 .install-hint {
   margin-top: 15px;
 }
+
+.poem-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.poem-link {
+  flex: 1;
+  text-decoration: none;
+  color: #222;
+}
+.poem-title {
+  display: block;
+  font-size: 17px;
+  font-weight: bold;
+}
+.poem-status {
+  display: block;
+  font-size: 13px;
+  color: #667;
+  margin-top: 3px;
+}
+.poem-delete {
+  background: transparent;
+  color: #c0392b;
+  font-size: 18px;
+  padding: 6px 8px;
+  margin-top: 0;
+}
+
