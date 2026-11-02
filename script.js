@@ -78,6 +78,36 @@ document.addEventListener('DOMContentLoaded', () => {
     return { icon: '📖', label: 'В процессе', pct };
   }
 
+  // Сколько интервальных повторений ещё осталось до сдачи
+  function remainingRepeats(p) {
+    if (!p.examDate) return null;
+    const { events } = buildSchedule(new Date(p.examDate + 'T00:00:00'));
+    return events.filter(e => e.start.getTime() > Date.now()).length;
+  }
+
+  // Дней до сдачи (или сколько дней назад она была)
+  function daysToExam(p) {
+    if (!p.examDate) return null;
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const examDay = new Date(p.examDate + 'T00:00:00');
+    return Math.round((examDay - today) / (1000 * 60 * 60 * 24));
+  }
+
+  // Красивое «сдача …» для списка
+  function examInfo(p) {
+    const days = daysToExam(p);
+    if (days === null) return '';
+    const examDay = new Date(p.examDate + 'T00:00:00');
+    const day = String(examDay.getDate()).padStart(2, '0');
+    const month = String(examDay.getMonth() + 1).padStart(2, '0');
+    const dateStr = day + '.' + month;
+    if (days > 1) return 'сдача ' + dateStr + ' (через ' + days + ' дн.)';
+    if (days === 1) return 'сдача ' + dateStr + ' (завтра)';
+    if (days === 0) return 'сдача ' + dateStr + ' (сегодня!)';
+    return 'сдача была ' + dateStr;
+  }
+
   function renderLibrary() {
     if (!poemListEl) return;
     const poems = loadPoems();
@@ -100,14 +130,39 @@ document.addEventListener('DOMContentLoaded', () => {
       const link = document.createElement('a');
       link.href = '#';
       link.className = 'poem-link';
+
+      // Основная строка статуса
+      let statusLine = st.icon + ' ' + st.label + ' · ' + st.pct + '%';
+
+      // Сколько повторений осталось и когда сдача
+      const left = remainingRepeats(p);
+      if (left !== null) {
+        if (left > 0) {
+          statusLine += ' · осталось повторений: ' + left;
+        } else {
+          statusLine += ' · повторения закончились';
+        }
+        statusLine += ' · ' + examInfo(p);
+      }
+
       link.innerHTML =
         '<span class="poem-title">' + escapeHtml(p.title) + '</span>' +
-        '<span class="poem-status">' + st.icon + ' ' + st.label + ' · ' + st.pct + '%</span>';
+        '<span class="poem-status">' + escapeHtml(statusLine) + '</span>';
       link.onclick = (e) => {
         e.preventDefault();
         openPoem(p.id);
       };
       item.appendChild(link);
+
+      // Кнопка «Повторить» — только у изученных стихов
+      if (st.pct >= 100) {
+        const repeat = document.createElement('button');
+        repeat.textContent = '🔁';
+        repeat.className = 'poem-repeat';
+        repeat.title = 'Повторить тренировку с начала';
+        repeat.onclick = () => repeatPoem(p.id);
+        item.appendChild(repeat);
+      }
 
       const del = document.createElement('button');
       del.textContent = '🗑';
@@ -158,6 +213,26 @@ document.addEventListener('DOMContentLoaded', () => {
       statusMessage.textContent = 'Шаг ' + (stepIndex + 1) + '. Продолжай.';
       nextBtn.disabled = false;
     }
+  }
+
+  // Повторить изученный стих с самого начала
+  function repeatPoem(id) {
+    const poems = loadPoems();
+    const p = poems.find(x => x.id === id);
+    if (!p) return;
+
+    currentPoemId = p.id;
+    originalLines = p.lines;
+    hiddenCounts = originalLines.map(() => 0);
+    history = [];
+    stepIndex = 0;
+    saveCurrentPoem(); // сброс сразу сохраняем
+
+    showScreen(trainingScreen);
+    renderTrainingText();
+    updateBackButton();
+    nextBtn.disabled = false;
+    statusMessage.textContent = '🔁 Повторение! Шаг 1. Читай текст — слова снова открыты.';
   }
 
   // Сохранить прогресс текущего стиха
@@ -367,7 +442,6 @@ document.addEventListener('DOMContentLoaded', () => {
       showInstallButton();
     });
 
-    // Если браузер не дал своё событие, показываем кнопку с подсказкой
     setTimeout(() => {
       if (!deferredPrompt && !document.getElementById('installHint')) {
         showInstallButton();
@@ -405,7 +479,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function showDownloadOffer(events, daysUntilExam) {
-    // Удаляем старое сообщение и кнопку, если есть
     const oldOffer = document.getElementById('calendarOffer');
     if (oldOffer) oldOffer.remove();
 
@@ -424,7 +497,6 @@ document.addEventListener('DOMContentLoaded', () => {
         : 'Скачайте файл и откройте его — календарь добавит <b>все тренировки сразу</b>.') +
       '</p>';
 
-    // Кнопка 1: скачать .ics — главный путь на обеих платформах
     const downloadButton = document.createElement('button');
     downloadButton.textContent = isIOS
       ? '📥 Добавить все тренировки в Календарь'
@@ -433,7 +505,6 @@ document.addEventListener('DOMContentLoaded', () => {
     downloadButton.onclick = () => downloadIcs(url);
     offer.appendChild(downloadButton);
 
-    // Кнопка 2 (только не на iPhone): скачать файл и открыть страницу импорта
     if (!isIOS) {
       const importButton = document.createElement('button');
       importButton.textContent = '🌐 Импорт через сайт Google Календаря';
@@ -445,7 +516,6 @@ document.addEventListener('DOMContentLoaded', () => {
       offer.appendChild(importButton);
     }
 
-    // Блок 3: ссылки на Google Календарь по одному — запасной путь, только не на iPhone
     if (!isIOS) {
       const details = document.createElement('details');
       details.className = 'gcal-details';
@@ -511,7 +581,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Разбиваем на строки
     originalLines = text.split('\n').filter(line => line.trim() !== '');
 
-    // Сохраняем стих в библиотеку
+    // Сохраняем стих в библиотеку (вместе с датой сдачи)
     currentPoemId = String(Date.now());
     const poems = loadPoems();
     poems.push({
@@ -520,6 +590,7 @@ document.addEventListener('DOMContentLoaded', () => {
       lines: originalLines,
       hiddenCounts: originalLines.map(() => 0),
       stepIndex: 0,
+      examDate: dateValue, // запоминаем дату сдачи
       createdAt: Date.now(),
       updatedAt: Date.now()
     });
@@ -565,7 +636,7 @@ document.addEventListener('DOMContentLoaded', () => {
       nextBtn.disabled = true;
     }
 
-    saveCurrentPoem(); // прогресс сохранён — статус в библиотеке обновится сам
+    saveCurrentPoem();
   });
 
   // Кнопка «Назад»
