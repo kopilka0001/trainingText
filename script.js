@@ -1,6 +1,9 @@
 document.addEventListener('DOMContentLoaded', () => {
   // Элементы
   const inputScreen = document.getElementById('inputScreen');
+  const libraryScreen = document.getElementById('libraryScreen');
+  const poemListEl = document.getElementById('poemList');
+  const newPoemBtn = document.getElementById('newPoemBtn');
   const readOnceScreen = document.getElementById('readOnceScreen');
   const trainingScreen = document.getElementById('trainingScreen');
 
@@ -16,7 +19,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const nextBtn = document.getElementById('nextBtn');
   const statusMessage = document.getElementById('statusMessage');
 
-  // Состояние
+  // Состояние текущей тренировки
+  let currentPoemId = null;
   let originalLines = [];
   let hiddenCounts = [];
   let history = [];
@@ -28,10 +32,161 @@ document.addEventListener('DOMContentLoaded', () => {
   // Адрес страницы импорта/экспорта Google Календаря
   const GCAL_IMPORT_URL = 'https://calendar.google.com/calendar/u/0/r/settings/export';
 
-  // Экранирование HTML-символов в тексте пользователя
+  // Экранирование HTML-символов
   function escapeHtml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
+
+  // ===== БИБЛИОТЕКА СТИХОВ =====
+
+  const LIBRARY_KEY = 'poemLibrary';
+
+  function loadPoems() {
+    try {
+      return JSON.parse(localStorage.getItem(LIBRARY_KEY)) || [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function savePoems(poems) {
+    localStorage.setItem(LIBRARY_KEY, JSON.stringify(poems));
+  }
+
+  // Название стиха — первая строка, обрезанная до 40 символов
+  function makeTitle(lines) {
+    const first = (lines[0] || '').trim();
+    return first.length > 40 ? first.slice(0, 40).trim() + '…' : (first || 'Без названия');
+  }
+
+  // Процент скрытых (выученных) слов
+  function poemProgress(p) {
+    let total = 0, hidden = 0;
+    p.lines.forEach((line, i) => {
+      const words = line.trim().split(/\s+/).filter(w => w);
+      total += words.length;
+      hidden += Math.min(p.hiddenCounts[i] || 0, words.length);
+    });
+    return total ? Math.round(hidden / total * 100) : 0;
+  }
+
+  // Статус стиха: иконка + подпись + процент
+  function poemStatus(p) {
+    const pct = poemProgress(p);
+    if (pct >= 100) return { icon: '✅', label: 'Изучен', pct };
+    if (pct === 0) return { icon: '🆕', label: 'Не начат', pct };
+    return { icon: '📖', label: 'В процессе', pct };
+  }
+
+  function renderLibrary() {
+    if (!poemListEl) return;
+    const poems = loadPoems();
+    poemListEl.innerHTML = '';
+
+    if (poems.length === 0) {
+      poemListEl.innerHTML =
+        '<p class="calendar-message">Пока пусто. Нажмите «➕ Новый стих», чтобы начать!</p>';
+      return;
+    }
+
+    // Свежие сверху
+    poems.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+    poems.forEach(p => {
+      const st = poemStatus(p);
+      const item = document.createElement('div');
+      item.className = 'poem-item';
+
+      const link = document.createElement('a');
+      link.href = '#';
+      link.className = 'poem-link';
+      link.innerHTML =
+        '<span class="poem-title">' + escapeHtml(p.title) + '</span>' +
+        '<span class="poem-status">' + st.icon + ' ' + st.label + ' · ' + st.pct + '%</span>';
+      link.onclick = (e) => {
+        e.preventDefault();
+        openPoem(p.id);
+      };
+      item.appendChild(link);
+
+      const del = document.createElement('button');
+      del.textContent = '🗑';
+      del.className = 'poem-delete';
+      del.title = 'Удалить стих';
+      del.onclick = () => {
+        if (confirm('Удалить «' + p.title + '»?')) {
+          savePoems(loadPoems().filter(x => x.id !== p.id));
+          renderLibrary();
+        }
+      };
+      item.appendChild(del);
+
+      poemListEl.appendChild(item);
+    });
+  }
+
+  // Переключение экранов
+  function showScreen(name) {
+    [inputScreen, libraryScreen, readOnceScreen, trainingScreen].forEach(s => {
+      if (s) s.classList.add('hidden');
+    });
+    if (name) name.classList.remove('hidden');
+  }
+
+  function openLibrary() {
+    renderLibrary();
+    showScreen(libraryScreen || inputScreen);
+  }
+
+  // Открыть стих в сохранённом состоянии
+  function openPoem(id) {
+    const p = loadPoems().find(x => x.id === id);
+    if (!p) return;
+    currentPoemId = p.id;
+    originalLines = p.lines;
+    hiddenCounts = p.hiddenCounts.slice();
+    stepIndex = p.stepIndex;
+    history = [];
+
+    showScreen(trainingScreen);
+    renderTrainingText();
+    updateBackButton();
+    if (isAllHidden()) {
+      statusMessage.textContent = '🎉 Отлично! Все слова скрыты — ты выучил текст!';
+      nextBtn.disabled = true;
+    } else {
+      statusMessage.textContent = 'Шаг ' + (stepIndex + 1) + '. Продолжай.';
+      nextBtn.disabled = false;
+    }
+  }
+
+  // Сохранить прогресс текущего стиха
+  function saveCurrentPoem() {
+    if (!currentPoemId) return;
+    const poems = loadPoems();
+    const p = poems.find(x => x.id === currentPoemId);
+    if (!p) return;
+    p.hiddenCounts = hiddenCounts.slice();
+    p.stepIndex = stepIndex;
+    p.updatedAt = Date.now();
+    savePoems(poems);
+  }
+
+  if (newPoemBtn) {
+    newPoemBtn.addEventListener('click', () => {
+      currentPoemId = null;
+      showScreen(inputScreen);
+    });
+  }
+
+  // Стартовый экран: библиотека, если стихи уже есть
+  if (libraryScreen && loadPoems().length > 0) {
+    openLibrary();
+  } else {
+    showScreen(inputScreen);
+  }
+
+  // ===== КАЛЕНДАРЬ =====
 
   // Расчет интервалов повторения (в днях)
   function calculateIntervals(daysUntilExam) {
@@ -199,7 +354,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   showTodayReminder();
 
-  // --- Кнопка «Установить приложение» (замена пропавшего баннера Chrome) ---
+  // --- Кнопка «Установить приложение» ---
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
     window.navigator.standalone === true;
 
@@ -232,14 +387,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
       button.onclick = () => {
         if (deferredPrompt) {
-          // Браузер поддерживает установку — показываем системный диалог
           deferredPrompt.prompt();
           deferredPrompt.userChoice.finally(() => {
             deferredPrompt = null;
             hint.remove();
           });
         } else {
-          // Своя подсказка: как установить вручную
           alert(isIOS
             ? 'На iPhone: нажмите кнопку «Поделиться» внизу Safari и выберите «На экран “Домой”».'
             : 'На Android: откройте меню браузера (три точки справа вверху) и выберите «Установить приложение» или «Добавить на главный экран».');
@@ -263,7 +416,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const offer = document.createElement('div');
     offer.id = 'calendarOffer';
 
-    // Текст подсказки зависит от платформы
     offer.innerHTML =
       '<p class="calendar-message">📅 Схема повторений рассчитана: ' +
       events.length + ' тренировок за ' + (daysUntilExam <= 1 ? '1 день' : daysUntilExam + ' дн.') +
@@ -281,8 +433,7 @@ document.addEventListener('DOMContentLoaded', () => {
     downloadButton.onclick = () => downloadIcs(url);
     offer.appendChild(downloadButton);
 
-    // Кнопка 2 (только не на iPhone): скачать файл и сразу открыть
-    // страницу импорта/экспорта Google Календаря
+    // Кнопка 2 (только не на iPhone): скачать файл и открыть страницу импорта
     if (!isIOS) {
       const importButton = document.createElement('button');
       importButton.textContent = '🌐 Импорт через сайт Google Календаря';
@@ -310,7 +461,6 @@ document.addEventListener('DOMContentLoaded', () => {
         link.rel = 'noopener';
         link.className = 'gcal-link';
 
-        // Понятная подпись: дата и время тренировки
         const d = event.start;
         const day = String(d.getDate()).padStart(2, '0');
         const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -326,7 +476,6 @@ document.addEventListener('DOMContentLoaded', () => {
       offer.appendChild(details);
     }
 
-    // Предложение показываем на экране первого чтения
     readOnceScreen.prepend(offer);
   }
 
@@ -357,10 +506,25 @@ document.addEventListener('DOMContentLoaded', () => {
     // Схема повторений + предложение скачать календарь
     const { events, daysUntilExam } = buildSchedule(examDate);
     showDownloadOffer(events, daysUntilExam);
-    saveSchedule(events); // запоминаем расписание для напоминаний при открытии
+    saveSchedule(events);
 
     // Разбиваем на строки
     originalLines = text.split('\n').filter(line => line.trim() !== '');
+
+    // Сохраняем стих в библиотеку
+    currentPoemId = String(Date.now());
+    const poems = loadPoems();
+    poems.push({
+      id: currentPoemId,
+      title: makeTitle(originalLines),
+      lines: originalLines,
+      hiddenCounts: originalLines.map(() => 0),
+      stepIndex: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+    savePoems(poems);
+
     hiddenCounts = originalLines.map(() => 0);
     history = [];
     stepIndex = 0;
@@ -400,6 +564,8 @@ document.addEventListener('DOMContentLoaded', () => {
       statusMessage.textContent = '🎉 Отлично! Все слова скрыты — ты выучил текст!';
       nextBtn.disabled = true;
     }
+
+    saveCurrentPoem(); // прогресс сохранён — статус в библиотеке обновится сам
   });
 
   // Кнопка «Назад»
@@ -414,6 +580,8 @@ document.addEventListener('DOMContentLoaded', () => {
     statusMessage.textContent = 'Вернулись на шаг ' + (stepIndex + 1) + '. Продолжай.';
     updateBackButton();
     nextBtn.disabled = false;
+
+    saveCurrentPoem();
   });
 
   function updateBackButton() {
@@ -459,11 +627,9 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (refreshing) return;
     refreshing = true;
-    // Новый воркер активировался — перезагружаем страницу, чтобы показать свежую версию
     window.location.reload();
   });
 
-  // Проверяем обновления при каждом открытии приложения
   navigator.serviceWorker.ready.then((reg) => {
     reg.update().catch(() => {});
   });
