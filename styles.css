@@ -159,3 +159,11 @@ button:disabled {
   margin-top: 0;
 }
 
+.poem-repeat {
+  background: #17a2b8;
+  color: white;
+  padding: 8px 12px;
+  font-size: 14px;
+  margin-top: 0;
+}
+
