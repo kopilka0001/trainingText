@@ -246,3 +246,42 @@ button.gate-waiting {
   font-size: 14px;
   margin-top: 0;
 }
+
+/* Кнопка «Закончить тренировку» — спокойная, вторичная */
+.exit-btn {
+  background-color: var(--surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  font-size: 14px;
+  padding: 10px 18px;
+  width: 100%;
+}
+.exit-btn:hover:not(:disabled) {
+  background-color: var(--bg);
+}
+
+/* Панель резервных копий и кнопка даты стиха (создаются скриптом динамически) */
+.backup-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 15px;
+}
+.backup-btn {
+  font-size: 13px;
+  padding: 8px 12px;
+  margin-top: 0;
+}
+.backup-note {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+.poem-date {
+  font-size: 12px;
+  color: var(--text-muted);
+  border: none;
+  background: transparent;
+  padding: 4px 6px;
+  margin-top: 0;
+}
