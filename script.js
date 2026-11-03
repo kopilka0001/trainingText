@@ -2,11 +2,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // ===== ВЕРСИЯ СБОРКИ =====
   // Меняйте номер синхронно с версией кэша в sw.js — это метка,
   // по которой видно, какая версия реально запущена на устройстве.
-  const APP_VERSION = 'v7';
+  const APP_VERSION = 'v2.28';
   console.log('[Тренажёр] версия ' + APP_VERSION);
   const versionBadge = document.createElement('div');
   versionBadge.textContent = APP_VERSION;
-  versionBadge.style.cssText = 'position:fixed;bottom:4px;right:8px;font-size:11px;opacity:.55;color:#667;pointer-events:none;z-index:999;';
+  versionBadge.style.cssText = 'position:fixed;bottom:4px;right:8px;font-size:11px;opacity:.55;color:var(--text-muted, #667);pointer-events:none;z-index:999;';
   document.body.appendChild(versionBadge);
 
   // Элементы
@@ -648,348 +648,420 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ===== МИГРАЦИЯ ПОСЛЕ ОБНОВЛЕНИЯ =====
-  // ВАЖНО: миграция касается только расписания напоминаний (STORAGE_KEY).
-  // Библиотеку стихов (LIBRARY_KEY) она НЕ трогает — никогда.
-  const SCHEMA_VERSION = 2;
+  // ===== МИГРАЦИЯ: старые данные одного стиха → библиотека =====
+  // Если человек начинал пользоваться в старой версии (один стих в отдельном
+  // ключе), при первом запуске переносим его в библиотеку и удаляем старый ключ.
+  const MIGRATED_KEY = 'migrationDone';
+  const OLD_TEXT_KEY = 'poemText';
+  const OLD_HIDDEN_KEY = 'hiddenCounts';
+  const OLD_STEP_KEY = 'stepIndex';
 
-  function migrate() {
-    if (Number(localStorage.getItem('schemaVersion') || 1) >= SCHEMA_VERSION) return;
-
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      try {
-        const fixed = JSON.parse(raw).map(e => ({
-          start: clampToAwake(new Date(e.start)).toISOString(),
-          description: e.description || '',
-          shown: false
-        }));
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(fixed));
-      } catch (e) {
-        localStorage.removeItem(STORAGE_KEY);
+  function migrateOldStorage() {
+    if (localStorage.getItem(MIGRATED_KEY) === 'yes') return;
+    const oldText = localStorage.getItem(OLD_TEXT_KEY);
+    if (oldText && oldText.trim()) {
+      const lines = oldText.split('\n').filter(l => l.trim());
+      const hiddenCounts = lines.map(() => 0);
+      const savedHidden = localStorage.getItem(OLD_HIDDEN_KEY);
+      if (savedHidden) {
+        try {
+          const arr = JSON.parse(savedHidden);
+          if (Array.isArray(arr) && arr.length === lines.length) {
+            for (let i = 0; i < lines.length; i++) {
+              hiddenCounts[i] = Math.max(0, Math.min(Number(arr[i]) || 0, lines[i].trim().split(/\s+/).filter(w => w).length));
+            }
+          }
+        } catch (e) {}
+      }
+      const poems = loadPoems();
+      // Не дублируем: если такой текст уже есть в библиотеке — пропускаем
+      const exists = poems.some(p => p.lines.join('\n') === lines.join('\n'));
+      if (!exists) {
+        poems.push({
+          id: String(Date.now()),
+          title: makeTitle(lines),
+          lines: lines,
+          hiddenCounts: hiddenCounts,
+          stepIndex: Number(localStorage.getItem(OLD_STEP_KEY)) || 0,
+          examDate: null,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        });
+        savePoems(poems);
       }
     }
-    localStorage.setItem('schemaVersion', SCHEMA_VERSION);
+    localStorage.setItem(MIGRATED_KEY, 'yes');
+    // Старые ключи можно оставить на случай отката — или подчистить:
+    localStorage.removeItem(OLD_HIDDEN_KEY);
+    localStorage.removeItem(OLD_STEP_KEY);
   }
 
-  // Стартовый экран: библиотека, если стихи уже есть
-  migrate();
-  if (libraryScreen && loadPoems().length > 0) {
-    openLibrary();
-  } else {
-    showScreen(inputScreen);
-  }
+  // ===== РАСПИСАНИЕ ПОВТОРЕНИЙ =====
+  // Классическая схема интервальных повторений к дате сдачи:
+  // 1 день, 3 дня, 7 дней, 14 дней, 30 дней от дня добавления стиха.
+  // Все события зажимаются в «тихие часы» (не раньше 8:00, не позже 21:00).
 
-  // ===== КАЛЕНДАРЬ =====
-
-  // Расчет интервалов повторения (в днях)
-  function calculateIntervals(daysUntilExam) {
-    const intervals = [];
-    let remaining = daysUntilExam;
-
-    while (remaining > 7) {
-      intervals.push(3);
-      remaining -= 3;
-    }
-    while (remaining > 3) {
-      intervals.push(2);
-      remaining -= 2;
-    }
-    while (remaining > 0) {
-      intervals.push(1);
-      remaining -= 1;
-    }
-    return intervals;
-  }
-
-  // Дата/время в формате ICS (UTC)
-  function icsDateTime(d) {
-    return d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-  }
-
-  // Экранирование спецсимволов по стандарту ICS (RFC 5545)
-  function escapeICS(text) {
-    return text
-      .replace(/\\/g, '\\\\')
-      .replace(/;/g, '\\;')
-      .replace(/,/g, '\\,')
-      .replace(/\r?\n/g, '\\n');
-  }
-
-  // Ссылка-шаблон события для Google Календаря
-  function buildGoogleCalendarLink(event) {
-    const params = new URLSearchParams({
-      action: 'TEMPLATE',
-      text: 'Тренировка: заучивание стиха',
-      dates: icsDateTime(event.start) + '/' + icsDateTime(event.end),
-      details: event.description
-    });
-    return 'https://calendar.google.com/calendar/render?' + params.toString();
-  }
-
-  // Генерация содержимого ICS файла
-  function generateICS(events) {
-    let ics = 'BEGIN:VCALENDAR\r\n';
-    ics += 'VERSION:2.0\r\n';
-    ics += 'PRODID:-//PoemTrainer//RU\r\n';
-    ics += 'CALSCALE:GREGORIAN\r\n';
-
-    events.forEach((event, index) => {
-      ics += 'BEGIN:VEVENT\r\n';
-      ics += 'UID:poem-training-' + Date.now() + '-' + index + '@poemtrainer\r\n';
-      ics += 'DTSTAMP:' + icsDateTime(new Date()) + '\r\n';
-      ics += 'DTSTART:' + icsDateTime(event.start) + '\r\n';
-      ics += 'DTEND:' + icsDateTime(event.end) + '\r\n';
-      ics += 'SUMMARY:' + escapeICS('Тренировка №' + (index + 1) + ' — заучивание стиха') + '\r\n';
-      ics += 'DESCRIPTION:' + escapeICS(event.description) + '\r\n';
-      ics += 'BEGIN:VALARM\r\n';
-      ics += 'TRIGGER:-PT15M\r\n';
-      ics += 'ACTION:DISPLAY\r\n';
-      ics += 'DESCRIPTION:' + escapeICS('Пора повторять стих!') + '\r\n';
-      ics += 'END:VALARM\r\n';
-      ics += 'END:VEVENT\r\n';
-    });
-
-    ics += 'END:VCALENDAR';
-    return ics;
-  }
-
-  // Составление расписания повторений
   function buildSchedule(examDate) {
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const examDay = new Date(examDate.getFullYear(), examDate.getMonth(), examDate.getDate());
-    const daysUntilExam = Math.round((examDay - today) / (1000 * 60 * 60 * 24));
-
     const events = [];
-
-    if (daysUntilExam <= 1) {
-      // Экстренная схема в течение дня.
-      // Каждый момент пропускаем через тихие часы: если сессия началась
-      // вечером, ночные события переносятся на утро.
-      const hourOffsets = [0.5, 2, 6, 14, daysUntilExam >= 1 ? 24 : 20];
-      hourOffsets.forEach((hours, index) => {
-        let start = new Date(now.getTime() + hours * 60 * 60 * 1000);
-        start = clampToAwake(start);
-        const end = new Date(start.getTime() + 30 * 60 * 1000);
-        const labels = ['первичное закрепление', 'промежуточная проверка',
-          'вечернее повторение', 'утреннее повторение', 'финальное повторение'];
-        events.push({ start, end, description: 'Экстренная схема: ' + labels[index] });
-      });
-    } else {
-      // Стандартная схема по дням
-      const intervals = calculateIntervals(daysUntilExam);
-      let dayOffset = 0;
-      intervals.forEach((interval, index) => {
-        dayOffset += interval;
-        let start = new Date(today.getTime() + dayOffset * 24 * 60 * 60 * 1000);
-        start.setHours(18, 0, 0, 0);
-        start = clampToAwake(start);
-        const end = new Date(start.getTime() + 30 * 60 * 1000);
-        events.push({
-          start,
-          end,
-          description: 'Повторение через ' + interval + ' дн. после предыдущего. Тренировка №' + (index + 1)
-        });
-      });
-    }
-
-    // Финальное повторение — утром дня сдачи
-    const last = events[events.length - 1];
-    last.start = new Date(examDay);
-    last.start.setHours(9, 0, 0, 0);
-    last.end = new Date(last.start.getTime() + 30 * 60 * 1000);
-    last.description = 'Финальное повторение перед сдачей!';
-
-    return { events, daysUntilExam };
+    const base = new Date();
+    const intervals = [1, 3, 7, 14, 30];
+    intervals.forEach(days => {
+      const d = new Date(base);
+      d.setDate(d.getDate() + days);
+      if (d <= examDate) {
+        events.push({ start: clampToAwake(d), type: 'repeat' });
+      }
+    });
+    // Сам день сдачи — утром
+    events.push({ start: clampToAwake(new Date(examDate)), type: 'exam' });
+    events.sort((a, b) => a.start - b.start);
+    return { events };
   }
-
-  // --- Напоминание при открытии приложения ---
 
   function saveSchedule(events) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(
-      events.map(e => ({
-        start: e.start.toISOString(),
-        description: e.description,
-        shown: false
-      }))
-    ));
+    const payload = events.map(e => ({
+      ts: e.start.getTime(),
+      type: e.type
+    }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  }
+
+  function loadSchedule() {
+    try {
+      const arr = JSON.parse(localStorage.getItem(STORAGE_KEY));
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .map(e => ({ start: new Date(e.ts), type: e.type }))
+        .filter(e => !isNaN(e.start.getTime()));
+    } catch (e) {
+      return [];
+    }
   }
 
   function clearSchedule() {
     localStorage.removeItem(STORAGE_KEY);
   }
 
-  function showTodayReminder() {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
+  // Очистка прошедших событий
+  function cleanupSchedule() {
+    const events = loadSchedule();
+    const fresh = events.filter(e => e.start.getTime() > Date.now());
+    if (fresh.length !== events.length) saveSchedule(fresh);
+    return fresh;
+  }
 
-    let events;
-    try { events = JSON.parse(raw); } catch (e) { return; }
-
+  // Есть ли тренировка сегодня? Для баннера на главном экране
+  function getTodayReminder() {
+    const events = cleanupSchedule();
+    if (!events.length) return null;
     const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
-    const TWELVE_HOURS = 12 * 60 * 60 * 1000;
-
-    let changed = false;
-    const due = [];
-    events.forEach(e => {
-      const t = new Date(e.start);
-      const today = t >= startOfToday && t < endOfToday;
-      const fresh = t <= now && (now - t) < TWELVE_HOURS;
-      if (today && fresh && !e.shown) {
-        e.shown = true;
-        changed = true;
-        due.push(e);
-      }
-      if ((now - t) > 2 * 24 * 60 * 60 * 1000) {
-        e.expired = true;
-        changed = true;
-      }
-    });
-
-    if (changed) {
-      localStorage.setItem(STORAGE_KEY,
-        JSON.stringify(events.filter(e => !e.expired)));
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    for (const e of events) {
+      if (e.start >= todayStart && e.start <= todayEnd) return e;
     }
-    if (due.length === 0) return;
-
-    const banner = document.createElement('div');
-    banner.className = 'today-reminder';
-    banner.innerHTML = '<p>📅 Сегодня по плану: ' +
-      escapeHtml(due[0].description) +
-      (due.length > 1 ? ' (и ещё ' + (due.length - 1) + ')' : '') +
-      '. Открой экран тренировки и повтори стих!</p>';
-    inputScreen.prepend(banner);
+    return null;
   }
 
-  showTodayReminder();
-
-  // --- Кнопка «Установить приложение» ---
-  const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
-    window.navigator.standalone === true;
-
-  if (!isStandalone) {
-    let deferredPrompt = null;
-
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      deferredPrompt = e;
-      showInstallButton();
-    });
-
-    setTimeout(() => {
-      if (!deferredPrompt && !document.getElementById('installHint')) {
-        showInstallButton();
-      }
-    }, 1500);
-
-    function showInstallButton() {
-      if (document.getElementById('installHint')) return;
-
-      const hint = document.createElement('div');
-      hint.id = 'installHint';
-      hint.className = 'install-hint';
-
-      const button = document.createElement('button');
-      button.textContent = '📲 Установить приложение';
-      button.classList.add('download-button');
-
-      button.onclick = () => {
-        if (deferredPrompt) {
-          deferredPrompt.prompt();
-          deferredPrompt.userChoice.finally(() => {
-            deferredPrompt = null;
-            hint.remove();
-          });
-        } else {
-          alert(isIOS
-            ? 'На iPhone: нажмите кнопку «Поделиться» внизу Safari и выберите «На экран “Домой”».'
-            : 'На Android: откройте меню браузера (три точки справа вверху) и выберите «Установить приложение» или «Добавить на главный экран».');
-        }
-      };
-
-      hint.appendChild(button);
-      inputScreen.appendChild(hint);
-    }
+  // ===== ФОРМАТ ICS (для Google Календаря и других) =====
+  // Время в ICS — UTC, формат YYYYMMDDTHHMMSSZ.
+  function icsStamp(date) {
+    return date.getUTCFullYear() +
+      String(date.getUTCMonth() + 1).padStart(2, '0') +
+      String(date.getUTCDate()).padStart(2, '0') +
+      'T' + String(date.getUTCHours()).padStart(2, '0') +
+      String(date.getUTCMinutes()).padStart(2, '0') +
+      String(date.getUTCSeconds()).padStart(2, '0') + 'Z';
   }
 
-  function showDownloadOffer(events, daysUntilExam) {
-    const oldOffer = document.getElementById('calendarOffer');
-    if (oldOffer) oldOffer.remove();
+  function generateICS(events) {
+    let lines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Poem Trainer//RU',
+      'CALSCALE:GREGORIAN'
+    ];
+    events.forEach((e, i) => {
+      const isExam = e.type === 'exam';
+      lines.push('BEGIN:VEVENT');
+      lines.push('UID:poem-trainer-' + Date.now() + '-' + i + '@local');
+      lines.push('DTSTAMP:' + icsStamp(new Date()));
+      lines.push('DTSTART:' + icsStamp(e.start));
+      // Событие на 30 минут
+      const end = new Date(e.start.getTime() + 30 * 60 * 1000);
+      lines.push('DTEND:' + icsStamp(end));
+      lines.push('SUMMARY:' + (isExam
+        ? '🎓 Сдача стихотворения'
+        : '📖 Повторение стихотворения'));
+      lines.push('DESCRIPTION:' + (isExam
+        ? 'День сдачи. Прогони стихотворение целиком.'
+        : 'Интервальное повторение. Прогони стихотворение целиком.'));
+      lines.push('BEGIN:VALARM');
+      lines.push('TRIGGER:-PT30M');
+      lines.push('ACTION:DISPLAY');
+      lines.push('DESCRIPTION:Напоминание о стихотворении');
+      lines.push('END:VALARM');
+      lines.push('END:VEVENT');
+    });
+    lines.push('END:VCALENDAR');
+    return lines.join('\r\n');
+  }
 
+  // Ссылки на добавление события в Google Календарь
+  function gcalLink(e, title) {
+    const fmt = d => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/g, '');
+    const end = new Date(e.start.getTime() + 30 * 60 * 1000);
+    const isExam = e.type === 'exam';
+    const text = encodeURIComponent(isExam
+      ? '🎓 Сдача стихотворения' + (title ? ': ' + title : '')
+      : '📖 Повторение стихотворения' + (title ? ': ' + title : ''));
+    return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=' + text +
+      '&dates=' + fmt(e.start) + '/' + fmt(end) +
+      '&details=' + encodeURIComponent('Напоминание из Тренажёра заучивания');
+  }
+
+  // Показать блок с календарём на экране после добавления
+  function showCalendarBlock(events, title) {
+    const old = document.getElementById('gcalBlock');
+    if (old) old.remove();
+
+    const block = document.createElement('div');
+    block.id = 'gcalBlock';
+    block.className = 'calendar-message';
+
+    const info = document.createElement('p');
+    info.textContent = 'Составлен график повторений: ' + events.length + ' событий до дня сдачи.';
+    block.appendChild(info);
+
+    // ICS-файл для импорта в любой календарь
     const icsContent = generateICS(events);
     const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
+    const dl = document.createElement('button');
+    dl.textContent = '📥 Скачать расписание (ICS)';
+    dl.className = 'download-button';
+    dl.onclick = () => downloadFile(URL.createObjectURL(blob), 'training-schedule.ics');
+    block.appendChild(dl);
 
-    const offer = document.createElement('div');
-    offer.id = 'calendarOffer';
+    // Свёрнутый список прямых ссылок Google Календаря
+    const details = document.createElement('details');
+    details.className = 'gcal-details';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Добавить в Google Календарь вручную';
+    details.appendChild(summary);
 
-    offer.innerHTML =
-      '<p class="calendar-message">📅 Схема повторений рассчитана: ' +
-      events.length + ' тренировок за ' + (daysUntilExam <= 1 ? '1 день' : daysUntilExam + ' дн.') +
-      '.<br>' + (isIOS
-        ? 'Скачайте файл — Safari сам предложит добавить <b>все тренировки сразу</b> в Календарь.'
-        : 'Скачайте файл и откройте его — календарь добавит <b>все тренировки сразу</b>.') +
-      '</p>';
+    events.forEach(e => {
+      const a = document.createElement('a');
+      a.href = gcalLink(e, title);
+      a.className = 'gcal-link';
+      a.target = '_blank';
+      a.rel = 'noopener';
+      const d = e.start;
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      a.textContent = (e.type === 'exam' ? '🎓 Сдача' : '📖 Повторение') +
+        ' — ' + day + '.' + month + ' в ' + hh + ':' + mm;
+      details.appendChild(a);
+    });
+    block.appendChild(details);
 
-    const downloadButton = document.createElement('button');
-    downloadButton.textContent = isIOS
-      ? '📥 Добавить все тренировки в Календарь'
-      : '📥 Скачать календарь тренировок';
-    downloadButton.classList.add('download-button');
-    downloadButton.onclick = () => downloadFile(url, 'training-schedule.ics');
-    offer.appendChild(downloadButton);
+    // Подсказка про импорт файла
+    const importNote = document.createElement('p');
+    importNote.innerHTML = 'Импорт файла в Google Календарь: ' +
+      '<a href="' + GCAL_IMPORT_URL + '" target="_blank" rel="noopener" class="gcal-link">Настройки календаря → Импорт</a>';
+    block.appendChild(importNote);
 
-    if (!isIOS) {
-      const importButton = document.createElement('button');
-      importButton.textContent = '🌐 Импорт через сайт Google Календаря';
-      importButton.classList.add('download-button');
-      importButton.onclick = () => {
-        downloadFile(url, 'training-schedule.ics');
-        window.open(GCAL_IMPORT_URL, '_blank');
-      };
-      offer.appendChild(importButton);
-    }
+    (libraryScreen || inputScreen).insertBefore(block, poemListEl ? poemListEl.nextSibling : null);
+  }
+  // ===== ЭКРАН ПОЛНОГО ТЕКСТА (после добавления стиха) =====
 
-    if (!isIOS) {
-      const details = document.createElement('details');
-      details.className = 'gcal-details';
-
-      const summary = document.createElement('summary');
-      summary.textContent = '➕ Добавить по одному в Google Календарь (' + events.length + ')';
-      details.appendChild(summary);
-
-      events.forEach((event, index) => {
-        const link = document.createElement('a');
-        link.href = buildGoogleCalendarLink(event);
-        link.target = '_blank';
-        link.rel = 'noopener';
-        link.className = 'gcal-link';
-
-        const d = event.start;
-        const day = String(d.getDate()).padStart(2, '0');
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const hours = String(d.getHours()).padStart(2, '0');
-        const minutes = String(d.getMinutes()).padStart(2, '0');
-        link.textContent = 'Тренировка №' + (index + 1) + ' — ' +
-          day + '.' + month + ' в ' + hours + ':' + minutes;
-
-        details.appendChild(link);
-        details.appendChild(document.createElement('br'));
-      });
-
-      offer.appendChild(details);
-    }
-
-    readOnceScreen.prepend(offer);
+  function showFullText() {
+    fullTextDisplay.textContent = originalLines.join('\n');
+    gateScreenStart = Date.now();
+    activeGateStep = 'full';
+    showScreen(readOnceScreen);
+    startGate(readOnceBtn, gateSecondsForFullText(), 'Читать…', READ_ONCE_LABEL);
   }
 
-  // Кнопка «Начать учить»
-  // Дата сдачи теперь НЕОБЯЗАТЕЛЬНА: можно начать учить без неё.
-  // Время (расписание) учитывается только для напоминаний о повторении.
-  // Кнопка «Мои стихи» на экране добавления стихотворения
+  if (startBtn) {
+    startBtn.addEventListener('click', () => {
+      const text = userText.value.trim();
+      if (!text) return;
+
+      const lines = text.split('\n').filter(l => l.trim());
+      const title = makeTitle(lines);
+
+      const rawDate = examDateInput && examDateInput.value ? examDateInput.value.trim() : null;
+      let examDate = null;
+      if (rawDate) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+          alert('Дата сдачи должна быть в формате ГГГГ-ММ-ДД.');
+          return;
+        }
+        const parsed = new Date(rawDate + 'T00:00:00');
+        if (isNaN(parsed) || parsed < new Date(new Date().setHours(0, 0, 0, 0))) {
+          alert('Дата сдачи некорректная или уже прошла.');
+          return;
+        }
+        examDate = rawDate;
+      }
+
+      // Новое стихотворение в библиотеку
+      const poems = loadPoems();
+      const poem = {
+        id: String(Date.now()),
+        title: title,
+        lines: lines,
+        hiddenCounts: lines.map(() => 0),
+        stepIndex: 0,
+        examDate: examDate,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      poems.push(poem);
+      savePoems(poems);
+
+      currentPoemId = poem.id;
+      originalLines = lines;
+      hiddenCounts = lines.map(() => 0);
+      stepIndex = 0;
+      history = [];
+
+      userText.value = '';
+      if (examDateInput) examDateInput.value = '';
+
+      if (examDate) {
+        const { events } = buildSchedule(new Date(examDate + 'T00:00:00'));
+        saveSchedule(events);
+        renderLibrary();
+        showCalendarBlock(events, title);
+      } else {
+        showFullText();
+      }
+    });
+  }
+
+  if (readOnceBtn) {
+    readOnceBtn.addEventListener('click', () => {
+      // Записываем фактическое время чтения полного текста
+      if (activeGateStep === 'full') {
+        recordStepTime(currentPoemId, 'full', elapsedSince(gateScreenStart));
+      }
+      showScreen(trainingScreen);
+      renderTrainingText();
+      updateBackButton();
+      statusMessage.textContent = 'Шаг 1. Читай текст, жми «Далее».';
+      enterTrainingStep(stepIndex);
+    });
+  }
+
+  // ===== ТРЕНИРОВКА =====
+
+  // Рендер тренировки: строки, у каждой скрыто последнее слово (или несколько —
+  // при откате «Назад» после перерыва скрытых меньше)
+  function renderTrainingText() {
+    let html = '';
+    for (let i = 0; i < originalLines.length; i++) {
+      const words = originalLines[i].trim().split(/\s+/).filter(w => w);
+      const hideCount = Math.min(hiddenCounts[i] || 0, words.length);
+      let lineHtml = '';
+      for (let j = 0; j < words.length; j++) {
+        const visible = words.length - j > hideCount;
+        if (visible) {
+          lineHtml += (lineHtml ? ' ' : '') + escapeHtml(words[j]);
+        } else {
+          lineHtml += (lineHtml ? ' ' : '') + '<span class="hidden-word">' + escapeHtml(words[j]) + '</span>';
+        }
+      }
+      html += (html ? '\n' : '') + lineHtml;
+    }
+    trainingTextDisplay.innerHTML = html;
+  }
+
+  function isAllHidden() {
+    for (let i = 0; i < originalLines.length; i++) {
+      const words = originalLines[i].trim().split(/\s+/).filter(w => w);
+      if ((hiddenCounts[i] || 0) < words.length) return false;
+    }
+    return originalLines.length > 0;
+  }
+
+  function updateBackButton() {
+    // «Назад» активна на любом шаге, кроме первого: даже если история сессии
+    // пуста (возврат после перерыва), откат делается вычислением в обработчике.
+    if (backBtn) backBtn.disabled = stepIndex === 0;
+  }
+
+  backBtn.addEventListener('click', () => {
+    if (stepIndex <= 0) return;
+    if (history.length > 0) {
+      const prevState = history.pop();
+      stepIndex = prevState.stepIndex;
+      hiddenCounts = prevState.hiddenCounts;
+    } else {
+      // Возврат после перерыва: история пуста, откатываем вычислением —
+      // каждый шаг скрывает ровно последнее слово каждой строки,
+      // поэтому состояние шага однозначно восстанавливается из номера.
+      stepIndex--;
+      hiddenCounts = hiddenCounts.map(h => Math.max(0, h - 1));
+    }
+    saveCurrentPoem();
+    renderTrainingText();
+    updateBackButton();
+    statusMessage.textContent = 'Шаг ' + (stepIndex + 1) + '. Вернулись на шаг назад.';
+    enterTrainingStep(stepIndex);
+  });
+
+  nextBtn.addEventListener('click', () => {
+    if (nextBtn.disabled) return;
+
+    // Записываем фактическое время шага для персонального гейта
+    if (activeGateStep !== null && activeGateStep !== 'full') {
+      recordStepTime(currentPoemId, activeGateStep, elapsedSince(stepStart));
+    }
+
+    // Снимок для «Назад» в этой сессии
+    history.push({
+      stepIndex: stepIndex,
+      hiddenCounts: hiddenCounts.slice()
+    });
+
+    // Каждый шаг скрывает последнее слово каждой строки
+    for (let i = 0; i < originalLines.length; i++) {
+      const words = originalLines[i].trim().split(/\s+/).filter(w => w);
+      hiddenCounts[i] = Math.min((hiddenCounts[i] || 0) + 1, words.length);
+    }
+    stepIndex++;
+
+    saveCurrentPoem();
+
+    if (isAllHidden()) {
+      renderTrainingText();
+      cancelGate();
+      statusMessage.textContent = '🎉 Отлично! Все слова скрыты — ты выучил текст!';
+      nextBtn.disabled = true;
+      clearSchedule();
+      return;
+    }
+
+    renderTrainingText();
+    updateBackButton();
+    statusMessage.textContent = 'Шаг ' + (stepIndex + 1) + '.';
+    enterTrainingStep(stepIndex);
+  });
+
+  // «Закончить тренировку»: сохранить прогресс, погасить отсчёт, уйти в библиотеку.
+  // Тренировка остаётся на текущем шаге — вернётесь и продолжите с того же места.
+  if (exitTrainingBtn) {
+    exitTrainingBtn.addEventListener('click', () => {
+      saveCurrentPoem();
+      cancelGate();
+      openLibrary();
+    });
+  }
+
+  // «Мои стихи» с экрана добавления — тем же способом
   const libraryFromInputBtn = document.getElementById('libraryFromInputBtn');
   if (libraryFromInputBtn) {
     libraryFromInputBtn.addEventListener('click', () => {
@@ -997,210 +1069,21 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  startBtn.addEventListener('click', () => {
-    const text = userText.value.trim();
-    const dateValue = examDateInput.value;
-
-    if (!text) {
-      alert('Пожалуйста, вставьте текст!');
-      return;
-    }
-
-    let examDate = null;
-    if (dateValue) {
-      examDate = new Date(dateValue + 'T00:00:00');
-      if (isNaN(examDate)) {
-        alert('Некорректная дата!');
-        return;
-      }
-      if (examDate < new Date(new Date().setHours(0, 0, 0, 0))) {
-        alert('Дата сдачи уже прошла!');
-        return;
-      }
-    }
-
-    // Расписание строим ТОЛЬКО если дата указана
-    if (examDate) {
-      const { events, daysUntilExam } = buildSchedule(examDate);
-      showDownloadOffer(events, daysUntilExam);
-      saveSchedule(events);
-    } else {
-      const oldOffer = document.getElementById('calendarOffer');
-      if (oldOffer) oldOffer.remove();
-    }
-
-    // Разбиваем на строки (пустые строки отбрасываем)
-    originalLines = text.split('\n').filter(line => line.trim() !== '');
-
-    // Сохраняем стих в библиотеку
-    currentPoemId = String(Date.now());
-    const poems = loadPoems();
-    poems.push({
-      id: currentPoemId,
-      title: makeTitle(originalLines),
-      lines: originalLines,
-      hiddenCounts: originalLines.map(() => 0),
-      stepIndex: 0,
-      examDate: dateValue || null, // дата может отсутствовать
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    });
-    savePoems(poems);
-
-    hiddenCounts = originalLines.map(() => 0);
-    history = [];
-    stepIndex = 0;
-
-    // Переход к первому чтению
-    inputScreen.classList.add('hidden');
-    readOnceScreen.classList.remove('hidden');
-    fullTextDisplay.textContent = text;
-
-    // Гейт экрана 0: кнопка «Прочитать» неактивна на время прочтения текста
-    gateScreenStart = Date.now();
-    startGate(readOnceBtn, gateSecondsForFullText(), 'Прочитать…', READ_ONCE_LABEL);
-
-    if (!examDate) {
-      const note = document.createElement('p');
-      note.className = 'calendar-message';
-      note.textContent = 'Дата сдачи не указана — напоминания о повторении не созданы. ' +
-        'Назначить дату можно позже: кнопка 📅 рядом со стихом в библиотеке.';
-      readOnceScreen.prepend(note);
-    }
-  });
-
-  // Кнопка «Готово, дальше»
-  readOnceBtn.addEventListener('click', () => {
-    // Фактическое время чтения полного текста — в базу персональных замеров
-    recordStepTime(currentPoemId, 'full', elapsedSince(gateScreenStart));
-    cancelGate();
-    readOnceScreen.classList.add('hidden');
-    trainingScreen.classList.remove('hidden');
-    statusMessage.textContent = 'Шаг 1. Читай текст, где последние слова скрыты пунктиром.';
-    renderTrainingText();
-    updateBackButton();
-    enterTrainingStep(stepIndex);
-  });
-
-  // Кнопка «Далее»
-  nextBtn.addEventListener('click', () => {
-    // Фактическое время на ЭТОМ шаге — в персональную базу шага
-    recordStepTime(currentPoemId, activeGateStep, elapsedSince(stepStart));
-    cancelGate();
-
-    history.push({ stepIndex, hiddenCounts: [...hiddenCounts] });
-
-    for (let i = 0; i < originalLines.length; i++) {
-      const words = originalLines[i].trim().split(/\s+/);
-      if (hiddenCounts[i] < words.length) {
-        hiddenCounts[i]++;
-      }
-    }
-
-    stepIndex++;
-    renderTrainingText();
-    statusMessage.textContent = 'Шаг ' + (stepIndex + 1) + '. Продолжай.';
-    updateBackButton();
-
-    // Новый экран — отсчёт заново, от среднего этого шага
-    enterTrainingStep(stepIndex, true);
-
-    saveCurrentPoem();
-  });
-
-  // Кнопка «Назад»
-  backBtn.addEventListener('click', () => {
-    if (history.length > 0) {
-      // Обычный откат по снимкам текущей сессии
-      const prevState = history.pop();
-      stepIndex = prevState.stepIndex;
-      hiddenCounts = prevState.hiddenCounts;
-    } else {
-      // Возврат к тренировке после перерыва: истории сессии нет,
-      // откатываемся вычислением — на шаге выше у каждой строки
-      // было на одно скрытое слово меньше
-      stepIndex = Math.max(0, stepIndex - 1);
-      hiddenCounts = hiddenCounts.map(h => Math.max(0, h - 1));
-    }
-
-    renderTrainingText();
-    statusMessage.textContent = 'Вернулись на шаг ' + (stepIndex + 1) + '. Продолжай.';
-    updateBackButton();
-
-    // Возврат на шаг — отсчёт заново от среднего именно этого шага
-    enterTrainingStep(stepIndex);
-
-    saveCurrentPoem();
-  });
-
-  // Кнопка «Закончить тренировку»: сохраняем прогресс и выходим в «Мои стихи».
-  // Тренировка остаётся на текущем шаге — вернётесь и продолжите с того же места.
-  if (exitTrainingBtn) {
-    exitTrainingBtn.addEventListener('click', () => {
-      cancelGate();
-      saveCurrentPoem();
-      showScreen(libraryScreen);
-    });
+  // ===== БАННЕР «СЕГОДНЯ ТРЕНИРОВКА» =====
+  function showTodayReminder() {
+    const ev = getTodayReminder();
+    if (!ev) return;
+    const banner = document.createElement('div');
+    banner.className = 'today-reminder';
+    banner.textContent = '⏰ Сегодня по расписанию: ' +
+      (ev.type === 'exam' ? 'сдача стихотворения' : 'повторение стихотворения') +
+      '. Прогони текст целиком!';
+    (libraryScreen || inputScreen).insertBefore(banner, poemListEl);
   }
 
-  function updateBackButton() {
-    // «Назад» активна на любом шаге, кроме первого —
-    // даже если человек вернулся к тренировке после перерыва (история сессии пуста)
-    backBtn.disabled = stepIndex === 0;
-  }
-
-  function renderTrainingText() {
-    let result = '';
-    for (let i = 0; i < originalLines.length; i++) {
-      const words = originalLines[i].trim().split(/\s+/).filter(w => w);
-      const hideCount = hiddenCounts[i];
-
-      for (let j = 0; j < words.length; j++) {
-        const fromEnd = words.length - j;
-        if (fromEnd <= hideCount) {
-          result += '<span class="hidden-word">' + escapeHtml(words[j]) + '</span>';
-        } else {
-          result += escapeHtml(words[j]);
-        }
-        if (j < words.length - 1) result += ' ';
-      }
-      result += '\n';
-    }
-    trainingTextDisplay.innerHTML = result;
-  }
-
-  function isAllHidden() {
-    for (let i = 0; i < originalLines.length; i++) {
-      const words = originalLines[i].trim().split(/\s+/).filter(w => w);
-      if (words.length > 0 && hiddenCounts[i] < words.length) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  // Минимальная дата сдачи — сегодня
-  if (examDateInput) {
-    const now = new Date();
-    const todayISO = now.getFullYear() + '-' +
-      String(now.getMonth() + 1).padStart(2, '0') + '-' +
-      String(now.getDate()).padStart(2, '0');
-    examDateInput.min = todayISO;
-  }
+  // ===== ЗАПУСК =====
+  migrateOldStorage();
+  cleanupSchedule();
+  openLibrary();
+  showTodayReminder();
 });
-
-// Регистрация сервис-воркера и автообновление приложения
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
-
-  let refreshing = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (refreshing) return;
-    refreshing = true;
-    window.location.reload();
-  });
-
-  navigator.serviceWorker.ready.then((reg) => {
-    reg.update().catch(() => {});
-  });
-}
