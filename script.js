@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const nextBtn = document.getElementById('nextBtn');
   const statusMessage = document.getElementById('statusMessage');
   const exitTrainingBtn = document.getElementById('exitTrainingBtn');
+  const libraryFromInputBtn = document.getElementById('libraryFromInputBtn');
 
   // Состояние текущей тренировки
   let currentPoemId = null;
@@ -638,6 +639,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Кнопка «Мои стихи» на экране добавления: открывает библиотеку
+  if (libraryFromInputBtn) {
+    libraryFromInputBtn.addEventListener('click', openLibrary);
+  }
+
   // ===== МИГРАЦИЯ ПОСЛЕ ОБНОВЛЕНИЯ =====
   // ВАЖНО: миграция касается только расписания напоминаний (STORAGE_KEY).
   // Библиотеку стихов (LIBRARY_KEY) она НЕ трогает — никогда.
@@ -1092,7 +1098,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Кнопка «Назад»
   backBtn.addEventListener('click', () => {
-    if (history.length === 0) return;
+    // Если вернулись к тренировке после перерыва, история сессии пуста,
+    // но шагов уже пройдено больше нуля — откатываемся вычислением:
+    // в этой схеме каждый шаг скрывает ровно последнее слово каждой строки,
+    // поэтому состояние шага N однозначно восстанавливается из номера шага.
+    if (history.length === 0) {
+      if (stepIndex === 0) return; // на первом шаге идти назад некуда
+
+      stepIndex--;
+      for (let i = 0; i < originalLines.length; i++) {
+        if (hiddenCounts[i] > 0) hiddenCounts[i]--;
+      }
+
+      renderTrainingText();
+      statusMessage.textContent = 'Вернулись на шаг ' + (stepIndex + 1) + '. Продолжай.';
+      updateBackButton();
+
+      // Возврат на шаг — отсчёт заново от среднего именно этого шага
+      enterTrainingStep(stepIndex);
+
+      saveCurrentPoem();
+      return;
+    }
 
     const prevState = history.pop();
     stepIndex = prevState.stepIndex;
@@ -1119,8 +1146,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateBackButton() {
-    backBtn.disabled = stepIndex === 0;   // «Назад» активна на любом шаге, кроме первого
-
+    backBtn.disabled = history.length === 0;
   }
 
   function renderTrainingText() {
