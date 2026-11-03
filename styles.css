@@ -1,6 +1,67 @@
+/* ===== ПАЛИТРА: все цвета в переменных ===== */
+:root {
+  --bg: #f4f4f9;          /* фон страницы */
+  --surface: #ffffff;     /* карточки, поля, блок текста */
+  --border: #ddd;         /* рамки карточек */
+  --input-border: #ccc;   /* рамки полей ввода */
+  --text: #222222;        /* основной текст */
+  --text-muted: #667;     /* вторичный текст */
+  --accent: #007bff;      /* основной цвет, кнопка «Далее» */
+  --accent-hover: #0056b3;
+  --btn-text: #ffffff;    /* текст на цветных кнопках */
+  --disabled-bg: #ccc;    /* неактивная кнопка (в т.ч. отсчёт гейта) */
+  --hidden-hint: #ccc;    /* пунктир скрытого слова */
+  --success: #28a745;     /* экспорт, успех */
+  --warning-bg: #fff3cd;  /* фон баннера напоминания */
+  --warning-text: #222222;/* текст баннера на жёлтом фоне */
+  --info-bg: #e7f3ff;     /* фон сообщения о календаре */
+  --info: #17a2b8;        /* кнопка «Повторить» */
+  --link: #4a90d9;        /* ссылки Google Календаря */
+  --danger: #c0392b;      /* удаление стиха, «Начать заново» */
+}
+
+/* ===== ТЁМНАЯ ТЕМА: по системной настройке ===== */
+@media (prefers-color-scheme: dark) {
+  body:not([data-theme="light"]) {
+    --bg: #1e2126;
+    --surface: #2a2e35;
+    --border: #3a4048;
+    --input-border: #4a5158;
+    --text: #e8e6e1;
+    --text-muted: #9aa0a8;
+    --accent: #5b9bd5;
+    --accent-hover: #7cb0e0;
+    --disabled-bg: #3a4048;
+    --hidden-hint: #565c66;
+    --warning-bg: #4a4326;
+    --warning-text: #f5e6a8;
+    --info-bg: #243447;
+    --link: #7cb0e0;
+  }
+}
+
+/* ===== ТЁМНАЯ ТЕМА: по переключателю в настройках ===== */
+[data-theme="dark"] {
+  --bg: #1e2126;
+  --surface: #2a2e35;
+  --border: #3a4048;
+  --input-border: #4a5158;
+  --text: #e8e6e1;
+  --text-muted: #9aa0a8;
+  --accent: #5b9bd5;
+  --accent-hover: #7cb0e0;
+  --disabled-bg: #3a4048;
+  --hidden-hint: #565c66;
+  --warning-bg: #4a4326;
+  --warning-text: #f5e6a8;
+  --info-bg: #243447;
+  --link: #7cb0e0;
+}
+
 body {
   font-family: Arial, sans-serif;
-  background-color: #f4f4f9;
+  background-color: var(--bg);
+  color: var(--text);
   display: flex;
   justify-content: center;
 }
@@ -12,13 +73,15 @@ body {
 textarea {
   width: 100%;
   padding: 15px;
-  border: 2px solid #ccc;
+  border: 2px solid var(--input-border);
   border-radius: 8px;
   box-sizing: border-box;
+  background: var(--surface);
+  color: var(--text);
 }
 button {
-  background-color: #007bff;
-  color: white;
+  background-color: var(--accent);
+  color: var(--btn-text);
   border: none;
   padding: 12px 24px;
   border-radius: 6px;
@@ -27,24 +90,31 @@ button {
   margin-top: 10px;
 }
 button:hover:not(:disabled) {
-  background-color: #0056b3;
+  background-color: var(--accent-hover);
 }
 button:disabled {
-  background-color: #ccc;
+  background-color: var(--disabled-bg);
   cursor: not-allowed;
+  /* цифры отсчёта не прыгают по ширине при смене секунды */
+  font-variant-numeric: tabular-nums;
+}
+/* мягкий визуальный сигнал отсчёта: пунктирная рамка, без мигания */
+button.gate-waiting {
+  border: 2px dashed currentColor;
 }
 .hidden {
   display: none;
 }
 .text-box {
-  background: white;
+  background: var(--surface);
+  color: var(--text);
   padding: 20px;
   border-radius: 8px;
   line-height: 1.8;
   white-space: pre-wrap;
   min-height: 140px;
   margin: 20px 0;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border);
   font-size: 18px;
   font-weight: normal;
 }
@@ -57,10 +127,17 @@ button:disabled {
   font-weight: bold;
   text-align: center;
 }
+/* Подсказки о таймере: приглушённый мелкий текст по центру */
+.hint {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+}
 /* Стиль скрытого слова: пунктир снизу */
 .hidden-word {
   color: transparent;
-  border-bottom: 2px dashed #ccc;
+  border-bottom: 2px dashed var(--hidden-hint);
   letter-spacing: 4px;
   display: inline-block;
   width: auto;
@@ -77,20 +154,22 @@ button:disabled {
 .date-input input {
   width: 100%;
   padding: 8px;
-  border: 1px solid #ccc;
+  border: 1px solid var(--input-border);
   border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
 }
 
 .calendar-message {
   margin-top: 15px;
   padding: 10px;
-  background-color: #e7f3ff;
+  background-color: var(--info-bg);
   border-radius: 5px;
   font-size: 14px;
 }
 .download-button {
   margin-top: 10px;
-  background-color: #28a745;
+  background-color: var(--success);
 }
 
 /* Свёрнутый блок ссылок на Google Календарь */
@@ -99,13 +178,13 @@ button:disabled {
 }
 .gcal-details summary {
   cursor: pointer;
-  color: #4a90d9;
+  color: var(--link);
   font-weight: bold;
 }
 .gcal-link {
   display: block;
   margin: 6px 0 0 4px;
-  color: #4a90d9;
+  color: var(--link);
   text-decoration: none;
 }
 .gcal-link:hover {
@@ -116,7 +195,8 @@ button:disabled {
 .today-reminder {
   margin-bottom: 15px;
   padding: 12px;
-  background-color: #fff3cd;
+  background-color: var(--warning-bg);
+  color: var(--warning-text);
   border-radius: 8px;
   font-size: 14px;
 }
@@ -129,8 +209,8 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: white;
-  border: 1px solid #ddd;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 10px;
@@ -138,7 +218,7 @@ button:disabled {
 .poem-link {
   flex: 1;
   text-decoration: none;
-  color: #222;
+  color: var(--text);
 }
 .poem-title {
   display: block;
@@ -148,22 +228,21 @@ button:disabled {
 .poem-status {
   display: block;
   font-size: 13px;
-  color: #667;
+  color: var(--text-muted);
   margin-top: 3px;
 }
 .poem-delete {
   background: transparent;
-  color: #c0392b;
+  color: var(--danger);
   font-size: 18px;
   padding: 6px 8px;
   margin-top: 0;
 }
 
 .poem-repeat {
-  background: #17a2b8;
+  background: var(--info);
   color: white;
   padding: 8px 12px;
   font-size: 14px;
   margin-top: 0;
 }
-
