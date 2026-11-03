@@ -19,7 +19,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const nextBtn = document.getElementById('nextBtn');
   const statusMessage = document.getElementById('statusMessage');
   const exitTrainingBtn = document.getElementById('exitTrainingBtn');
-  const libraryFromInputBtn = document.getElementById('libraryFromInputBtn');
 
   // Состояние текущей тренировки
   let currentPoemId = null;
@@ -639,7 +638,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Кнопка «Мои стихи» на экране добавления: открывает библиотеку
+  // Кнопка «Мои стихи» на экране добавления — переход в библиотеку
+  const libraryFromInputBtn = document.getElementById('libraryFromInputBtn');
   if (libraryFromInputBtn) {
     libraryFromInputBtn.addEventListener('click', openLibrary);
   }
@@ -1098,32 +1098,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Кнопка «Назад»
   backBtn.addEventListener('click', () => {
-    // Если вернулись к тренировке после перерыва, история сессии пуста,
-    // но шагов уже пройдено больше нуля — откатываемся вычислением:
-    // в этой схеме каждый шаг скрывает ровно последнее слово каждой строки,
-    // поэтому состояние шага N однозначно восстанавливается из номера шага.
-    if (history.length === 0) {
-      if (stepIndex === 0) return; // на первом шаге идти назад некуда
+    if (stepIndex === 0) return;
 
+    if (history.length > 0) {
+      // Обычный откат по снимку текущей сессии
+      const prevState = history.pop();
+      stepIndex = prevState.stepIndex;
+      hiddenCounts = prevState.hiddenCounts;
+    } else {
+      // Возврат после перерыва: история сессии пуста — откат вычислением.
+      // Каждый шаг скрывает ровно последнее слово каждой строки, поэтому
+      // состояние шага однозначно восстанавливается из номера шага.
       stepIndex--;
-      for (let i = 0; i < originalLines.length; i++) {
-        if (hiddenCounts[i] > 0) hiddenCounts[i]--;
-      }
-
-      renderTrainingText();
-      statusMessage.textContent = 'Вернулись на шаг ' + (stepIndex + 1) + '. Продолжай.';
-      updateBackButton();
-
-      // Возврат на шаг — отсчёт заново от среднего именно этого шага
-      enterTrainingStep(stepIndex);
-
-      saveCurrentPoem();
-      return;
+      hiddenCounts = hiddenCounts.map(h => Math.max(0, h - 1));
     }
-
-    const prevState = history.pop();
-    stepIndex = prevState.stepIndex;
-    hiddenCounts = prevState.hiddenCounts;
 
     renderTrainingText();
     statusMessage.textContent = 'Вернулись на шаг ' + (stepIndex + 1) + '. Продолжай.';
@@ -1146,7 +1134,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateBackButton() {
-    backBtn.disabled = history.length === 0;
+    // «Назад» активна на любом шаге, кроме первого — независимо от истории сессии
+    backBtn.disabled = stepIndex === 0;
   }
 
   function renderTrainingText() {
