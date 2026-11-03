@@ -7,7 +7,6 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <link rel="apple-touch-icon" href="icon-192.png">
 
-
     <meta charset="UTF-8">
     <title>Тренажёр заучивания</title>
     <link rel="stylesheet" href="styles.css">
@@ -15,44 +14,48 @@
 <body>
     <div class="container">
         <h1>Тренажёр заучивания: по одному слову</h1>
-      <div id="libraryScreen" class="hidden">
-        <h2>📚 Мои стихи</h2>
-        <div id="poemList"></div>
-        <button id="newPoemBtn">➕ Новый стих</button>
-      </div>
+
+        <!-- Экран библиотеки: открывается скриптом после первого запуска -->
+        <div id="libraryScreen" class="hidden">
+            <h2>📚 Мои стихи</h2>
+            <div id="poemList"></div>
+            <button id="newPoemBtn">➕ Новый стих</button>
+        </div>
 
         <!-- Экран 1: Ввод текста -->
         <div id="inputScreen" class="screen">
             <textarea id="userText" rows="8" placeholder="Вставь сюда стих..."></textarea>
-            
-            <!-- Добавленное поле для даты -->
+
             <div class="date-input">
                 <label for="examDate">Дата сдачи:</label>
                 <input type="date" id="examDate" required>
             </div>
-          
 
-            
             <button id="startBtn">Начать учить</button>
         </div>
 
-        <!-- Экран 2: Первое полное чтение -->
+        <!-- Экран 2: Первое полное чтение.
+             Гейт: кнопка неактивна до конца отсчёта, отсчёт рисует script.js.
+             Базовая подпись сохранена — скрипт возвращает её после отсчёта. -->
         <div id="readOnceScreen" class="screen hidden">
             <h2>Прочитай текст полностью</h2>
+            <p class="hint">Кнопка откроется, когда закончится время чтения. Успей дочитать!</p>
             <div id="fullTextDisplay" class="text-box"></div>
             <button id="readOnceBtn">Готово, дальше</button>
         </div>
 
-        <!-- Экран 3: Тренажёр -->
+        <!-- Экран 3: Тренажёр.
+             Гейт стоит только на «Далее»: отсчёт при каждом входе на экран,
+             при возврате «Назад» отсчёт запускается заново. «Назад» всегда активна. -->
         <div id="trainingScreen" class="screen hidden">
             <h2>Тренировка</h2>
-            <p>На каждом шаге исчезает <b>последнее слово</b> в каждой строке. Читай и жми «Далее». Если сложно — «Назад».</p>
+            <p>На каждом шаге исчезает <b>последнее слово</b> в каждой строке. Читай и жми «Далее» — она откроется, когда отработает таймер чтения. Если сложно — «Назад».</p>
             <div id="trainingTextDisplay" class="text-box"></div>
             <div class="controls">
                 <button id="backBtn" disabled>← Назад</button>
                 <button id="nextBtn">Далее →</button>
             </div>
-            <p id="statusMessage" class="status"></p>
+            <p id="statusMessage" class="status" aria-live="polite"></p>
         </div>
     </div>
 
