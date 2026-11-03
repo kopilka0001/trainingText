@@ -1,4 +1,4 @@
-const CACHE_NAME = 'poem-trainer-v2.22'; // меняйте на v2, v3... при каждом обновлении
+const CACHE_NAME = 'poem-trainer-v2.23'; // меняйте на v2, v3... при каждом обновлении
 const ASSETS = [
   './',
   './index.html',
