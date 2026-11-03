@@ -36,6 +36,178 @@ document.addEventListener('DOMContentLoaded', () => {
   const LIBRARY_KEY = 'poemLibrary';
   const STORAGE_KEY = 'trainingSchedule';
 
+  // ===== ГЕЙТ ПО ВРЕМЕНИ ПРОЧТЕНИЯ =====
+  // Идея: кнопка «Далее» заблокирована столько секунд, сколько нужно,
+  // чтобы прочитать видимый текст. Первый проход — расчёт по объёму текста,
+  // дальше — персональное среднее фактических времён ЭТОГО шага.
+  // Тайминги хранятся ОТДЕЛЬНО от библиотеки (GATE_KEY), а не в прогрессе.
+  const GATE_KEY = 'gateTimings';       // персональные времена шагов
+  const GATE_ENABLED_KEY = 'gateEnabled'; // 'off' = гейт выключен (режим «без таймера»)
+  const READING_WPM = 110;              // скорость чтения вслух, слов в минуту (коэффициент калибровки)
+  const MIN_GATE_SEC = 2;               // минимальный гейт, сек
+  const MAX_TIMINGS = 20;               // храним последние N замеров на шаг
+
+  let gateTimerId = null;
+  let gateScreenStart = 0;   // когда открылся экран полного текста
+  let stepStart = 0;         // когда загрузился текущий шаг тренировки
+  let activeGateStep = null; // индекс шага, для которого идёт отсчёт
+
+  // Оригинальные подписи кнопок берём из HTML один раз
+  const READ_ONCE_LABEL = readOnceBtn ? readOnceBtn.textContent : 'Готово, дальше';
+  const NEXT_LABEL = nextBtn ? nextBtn.textContent : 'Далее';
+
+  function isGateEnabled() {
+    return localStorage.getItem(GATE_ENABLED_KEY) !== 'off';
+  }
+
+  function elapsedSince(t) {
+    return t ? Math.round((Date.now() - t) / 1000) : 0;
+  }
+
+  function loadGateData() {
+    try {
+      const d = JSON.parse(localStorage.getItem(GATE_KEY));
+      return (d && typeof d === 'object') ? d : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveGateData(data) {
+    localStorage.setItem(GATE_KEY, JSON.stringify(data));
+  }
+
+  // При удалении стиха его тайминги тоже удаляем
+  function removeGateForPoem(poemId) {
+    if (!poemId) return;
+    const data = loadGateData();
+    if (data[poemId]) {
+      delete data[poemId];
+      saveGateData(data);
+    }
+  }
+
+  function getStepTimings(poemId, step) {
+    const data = loadGateData();
+    const poem = data[poemId];
+    if (!poem || !poem.steps) return [];
+    const arr = poem.steps[String(step)];
+    return Array.isArray(arr) ? arr : [];
+  }
+
+  // Записываем фактическое время шага (сек) в массив этого шага
+  function recordStepTime(poemId, step, seconds) {
+    if (!poemId || !seconds || seconds <= 0) return;
+    const data = loadGateData();
+    if (!data[poemId]) data[poemId] = { steps: {} };
+    if (!data[poemId].steps) data[poemId].steps = {};
+    const key = String(step);
+    const arr = Array.isArray(data[poemId].steps[key]) ? data[poemId].steps[key] : [];
+    arr.push(seconds);
+    while (arr.length > MAX_TIMINGS) arr.shift();
+    data[poemId].steps[key] = arr;
+    saveGateData(data);
+  }
+
+  function averageOf(arr) {
+    if (!arr.length) return null;
+    return Math.round(arr.reduce((s, x) => s + x, 0) / arr.length);
+  }
+
+  function countAllWords() {
+    let n = 0;
+    for (let i = 0; i < originalLines.length; i++) {
+      n += originalLines[i].trim().split(/\s+/).filter(w => w).length;
+    }
+    return n;
+  }
+
+  // Сколько слов сейчас ВИДНО (не скрыто пунктиром)
+  function countVisibleWords() {
+    let n = 0;
+    for (let i = 0; i < originalLines.length; i++) {
+      const words = originalLines[i].trim().split(/\s+/).filter(w => w);
+      const hideCount = hiddenCounts[i] || 0;
+      for (let j = 0; j < words.length; j++) {
+        if (words.length - j > hideCount) n++;
+      }
+    }
+    return n;
+  }
+
+  // Минимальное время прочтения по объёму: слова / (слов в минуту) * 60 сек
+  function readingSeconds(wordCount) {
+    return Math.max(MIN_GATE_SEC, Math.ceil(wordCount * 60 / READING_WPM));
+  }
+
+  // Гейт шага: среднее накопленных замеров ЭТОГО шага,
+  // а если замеров нет — расчёт по объёму видимого текста.
+  function gateSecondsForStep(stepIndex) {
+    if (!currentPoemId) return readingSeconds(countVisibleWords());
+    const avg = averageOf(getStepTimings(currentPoemId, stepIndex));
+    if (avg !== null) return Math.max(MIN_GATE_SEC, avg);
+    return readingSeconds(countVisibleWords());
+  }
+
+  // Гейт экрана полного текста: среднее замеров «full» или расчёт по всему тексту
+  function gateSecondsForFullText() {
+    if (!currentPoemId) return readingSeconds(countAllWords());
+    const avg = averageOf(getStepTimings(currentPoemId, 'full'));
+    if (avg !== null) return Math.max(MIN_GATE_SEC, avg);
+    return readingSeconds(countAllWords());
+  }
+
+  function cancelGate() {
+    if (gateTimerId !== null) {
+      clearInterval(gateTimerId);
+      gateTimerId = null;
+    }
+  }
+
+  // Запуск отсчёта на кнопке: неактивна с обратным отсчётом,
+  // затем активна с обычной подписью. Каждый новый экран — отсчёт заново.
+  function startGate(btn, seconds, countdownLabel, activeLabel) {
+    cancelGate();
+    if (!btn) return;
+    if (!isGateEnabled() || seconds <= 0) {
+      btn.disabled = false;
+      btn.textContent = activeLabel;
+      return;
+    }
+    btn.disabled = true;
+    let remaining = seconds;
+    const tick = () => {
+      if (remaining <= 0) {
+        cancelGate();
+        btn.disabled = false;
+        btn.textContent = activeLabel;
+        return;
+      }
+      btn.textContent = countdownLabel + ' ' + remaining + ' с';
+      remaining--;
+    };
+    tick();
+    gateTimerId = setInterval(tick, 1000);
+  }
+
+  // Загрузка нового шага: отсчёт стартует заново от среднего именно этого шага.
+  // «Назад» свободна всегда — гейт стоит только на движении вперёд.
+  // clearOnDone=true — только при движении вперёд на последний шаг:
+  // там снимаем напоминания, как в прежней логике завершения.
+  function enterTrainingStep(idx, clearOnDone) {
+    stepStart = Date.now();
+    activeGateStep = idx;
+    if (isAllHidden()) {
+      cancelGate();
+      statusMessage.textContent = '🎉 Отлично! Все слова скрыты — ты выучил текст!';
+      nextBtn.disabled = true;
+      if (clearOnDone) clearSchedule();
+      return;
+    }
+    nextBtn.disabled = false;
+    startGate(nextBtn, gateSecondsForStep(idx), 'Повторить…', NEXT_LABEL);
+  }
+
   // ===== ТИХИЕ ЧАСЫ (не беспокоим с 21:00 до 8:00) =====
   const QUIET_HOURS = { from: 21, to: 8 };
   const FALLBACK_MORNING = 10;
@@ -157,7 +329,12 @@ document.addEventListener('DOMContentLoaded', () => {
       alert('Библиотека пуста — пока нечего сохранять.');
       return;
     }
-    const data = JSON.stringify(poems, null, 2);
+    const data = JSON.stringify({
+      app: 'poem-trainer',
+      exportedAt: new Date().toISOString(),
+      poems: poems,
+      gateTimings: loadGateData()
+    }, null, 2);
     const blob = new Blob([data], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const d = new Date();
@@ -175,12 +352,18 @@ document.addEventListener('DOMContentLoaded', () => {
         alert('Не удалось прочитать файл: это не резервная копия приложения.');
         return;
       }
-      if (!Array.isArray(imported)) {
+      // Поддержка двух форматов: старый (массив стихов) и новый (объект с таймингами гейта)
+      let importedPoems = imported;
+      let importedGate = null;
+      if (!Array.isArray(imported) && imported && Array.isArray(imported.poems)) {
+        importedPoems = imported.poems;
+        importedGate = imported.gateTimings || null;
+      } else if (!Array.isArray(imported)) {
         alert('Файл не похож на резервную копию библиотеки.');
         return;
       }
       // Оставляем только корректные записи
-      const clean = imported.filter(p =>
+      const clean = importedPoems.filter(p =>
         p && Array.isArray(p.lines) && p.lines.length > 0 && Array.isArray(p.hiddenCounts)
       ).map(p => ({
         id: String(p.id || Date.now()),
@@ -200,6 +383,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!confirm(question)) return;
 
       savePoems(clean);
+      // Восстанавливаем персональные тайминги гейта, если они есть в копии
+      if (importedGate && typeof importedGate === 'object') {
+        saveGateData(importedGate);
+      }
       renderLibrary();
       alert('Импорт завершён: ' + clean.length + ' стихов.');
     };
@@ -361,6 +548,7 @@ document.addEventListener('DOMContentLoaded', () => {
       del.onclick = () => {
         if (confirm('Удалить «' + p.title + '»?')) {
           savePoems(loadPoems().filter(x => x.id !== p.id));
+          removeGateForPoem(p.id);
           renderLibrary();
         }
       };
@@ -396,13 +584,7 @@ document.addEventListener('DOMContentLoaded', () => {
     showScreen(trainingScreen);
     renderTrainingText();
     updateBackButton();
-    if (isAllHidden()) {
-      statusMessage.textContent = '🎉 Отлично! Все слова скрыты — ты выучил текст!';
-      nextBtn.disabled = true;
-    } else {
-      statusMessage.textContent = 'Шаг ' + (stepIndex + 1) + '. Продолжай.';
-      nextBtn.disabled = false;
-    }
+    enterTrainingStep(stepIndex);
   }
 
   // Повторить изученный стих с самого начала
@@ -421,8 +603,8 @@ document.addEventListener('DOMContentLoaded', () => {
     showScreen(trainingScreen);
     renderTrainingText();
     updateBackButton();
-    nextBtn.disabled = false;
     statusMessage.textContent = '🔁 Повторение! Шаг 1. Читай текст — слова снова открыты.';
+    enterTrainingStep(stepIndex);
   }
 
   // Сохранить прогресс текущего стиха
@@ -844,6 +1026,10 @@ document.addEventListener('DOMContentLoaded', () => {
     readOnceScreen.classList.remove('hidden');
     fullTextDisplay.textContent = text;
 
+    // Гейт экрана 0: кнопка «Прочитать» неактивна на время прочтения текста
+    gateScreenStart = Date.now();
+    startGate(readOnceBtn, gateSecondsForFullText(), 'Прочитать…', READ_ONCE_LABEL);
+
     if (!examDate) {
       const note = document.createElement('p');
       note.className = 'calendar-message';
@@ -855,15 +1041,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Кнопка «Готово, дальше»
   readOnceBtn.addEventListener('click', () => {
+    // Фактическое время чтения полного текста — в базу персональных замеров
+    recordStepTime(currentPoemId, 'full', elapsedSince(gateScreenStart));
+    cancelGate();
     readOnceScreen.classList.add('hidden');
     trainingScreen.classList.remove('hidden');
     statusMessage.textContent = 'Шаг 1. Читай текст, где последние слова скрыты пунктиром.';
     renderTrainingText();
     updateBackButton();
+    enterTrainingStep(stepIndex);
   });
 
   // Кнопка «Далее»
   nextBtn.addEventListener('click', () => {
+    // Фактическое время на ЭТОМ шаге — в персональную базу шага
+    recordStepTime(currentPoemId, activeGateStep, elapsedSince(stepStart));
+    cancelGate();
+
     history.push({ stepIndex, hiddenCounts: [...hiddenCounts] });
 
     for (let i = 0; i < originalLines.length; i++) {
@@ -878,12 +1072,8 @@ document.addEventListener('DOMContentLoaded', () => {
     statusMessage.textContent = 'Шаг ' + (stepIndex + 1) + '. Продолжай.';
     updateBackButton();
 
-    if (isAllHidden()) {
-      statusMessage.textContent = '🎉 Отлично! Все слова скрыты — ты выучил текст!';
-      nextBtn.disabled = true;
-      // Текст выучен — снимаем напоминания о нём («зомби-напоминания»)
-      clearSchedule();
-    }
+    // Новый экран — отсчёт заново, от среднего этого шага
+    enterTrainingStep(stepIndex, true);
 
     saveCurrentPoem();
   });
@@ -899,7 +1089,9 @@ document.addEventListener('DOMContentLoaded', () => {
     renderTrainingText();
     statusMessage.textContent = 'Вернулись на шаг ' + (stepIndex + 1) + '. Продолжай.';
     updateBackButton();
-    nextBtn.disabled = false;
+
+    // Возврат на шаг — отсчёт заново от среднего именно этого шага
+    enterTrainingStep(stepIndex);
 
     saveCurrentPoem();
   });
