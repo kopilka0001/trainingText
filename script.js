@@ -1119,7 +1119,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateBackButton() {
-    backBtn.disabled = history.length === 0;
+    backBtn.disabled = stepIndex === 0;   // «Назад» активна на любом шаге, кроме первого
+
   }
 
   function renderTrainingText() {
