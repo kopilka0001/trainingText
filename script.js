@@ -32,6 +32,30 @@ document.addEventListener('DOMContentLoaded', () => {
   // Адрес страницы импорта/экспорта Google Календаря
   const GCAL_IMPORT_URL = 'https://calendar.google.com/calendar/u/0/r/settings/export';
 
+  // ===== ТИХИЕ ЧАСЫ (не беспокоим с 21:00 до 8:00) =====
+  const QUIET_HOURS = { from: 21, to: 8 }; // не беспокоить с 21:00 до 8:00
+  const FALLBACK_MORNING = 10;             // куда переносим ночные события
+
+  function isAwake(d) {
+    const h = d.getHours();
+    return h >= QUIET_HOURS.to && h < QUIET_HOURS.from;
+  }
+
+  // Ночные события переносим на утро: раннее утро — сегодня в 10:00,
+  // поздний вечер/ночь — завтра в 10:00.
+  function clampToAwake(d) {
+    if (isAwake(d)) return d;
+    const fixed = new Date(d);
+    fixed.setSeconds(0, 0);
+    if (fixed.getHours() < QUIET_HOURS.to) {
+      fixed.setHours(FALLBACK_MORNING, 0, 0, 0);   // ночь → сегодня утром
+    } else {
+      fixed.setDate(fixed.getDate() + 1);          // поздний вечер → завтра утром
+      fixed.setHours(FALLBACK_MORNING, 0, 0, 0);
+    }
+    return fixed;
+  }
+
   // Экранирование HTML-символов
   function escapeHtml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -254,7 +278,32 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // ===== МИГРАЦИЯ ПОСЛЕ ОБНОВЛЕНИЯ =====
+  // При выходе новой версии поднимаем SCHEMA_VERSION и один раз
+  // пересчитываем сохранённое расписание по новым правилам (тихие часы).
+  const SCHEMA_VERSION = 2;
+
+  function migrate() {
+    if (Number(localStorage.getItem('schemaVersion') || 1) >= SCHEMA_VERSION) return;
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      try {
+        const fixed = JSON.parse(raw).map(e => ({
+          start: clampToAwake(new Date(e.start)).toISOString(),
+          description: e.description || '',
+          shown: false
+        }));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(fixed));
+      } catch (e) {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    }
+    localStorage.setItem('schemaVersion', SCHEMA_VERSION);
+  }
+
   // Стартовый экран: библиотека, если стихи уже есть
+  // (миграция расписания выполняется ДО первого показа напоминаний)
+  migrate();
   if (libraryScreen && loadPoems().length > 0) {
     openLibrary();
   } else {
@@ -356,23 +405,28 @@ document.addEventListener('DOMContentLoaded', () => {
     const events = [];
 
     if (daysUntilExam <= 1) {
-      // Экстренная схема в течение дня
+      // Экстренная схема в течение дня.
+      // Каждый момент пропускаем через тихие часы: если сессия началась
+      // вечером, ночные события переносятся на утро.
       const hourOffsets = [0.5, 2, 6, 14, daysUntilExam >= 1 ? 24 : 20];
       hourOffsets.forEach((hours, index) => {
-        const start = new Date(now.getTime() + hours * 60 * 60 * 1000);
+        let start = new Date(now.getTime() + hours * 60 * 60 * 1000);
+        start = clampToAwake(start);
         const end = new Date(start.getTime() + 30 * 60 * 1000);
         const labels = ['первичное закрепление', 'промежуточная проверка',
           'вечернее повторение', 'утреннее повторение', 'финальное повторение'];
         events.push({ start, end, description: 'Экстренная схема: ' + labels[index] });
       });
     } else {
-      // Стандартная схема по дням
+      // Стандартная схема по дням (18:00 — внутри окна бодрствования,
+      // но clamp подстрахует при изменении QUIET_HOURS)
       const intervals = calculateIntervals(daysUntilExam);
       let dayOffset = 0;
       intervals.forEach((interval, index) => {
         dayOffset += interval;
-        const start = new Date(today.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+        let start = new Date(today.getTime() + dayOffset * 24 * 60 * 60 * 1000);
         start.setHours(18, 0, 0, 0);
+        start = clampToAwake(start);
         const end = new Date(start.getTime() + 30 * 60 * 1000);
         events.push({
           start,
@@ -397,8 +451,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function saveSchedule(events) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(
-      events.map(e => ({ start: e.start.toISOString(), description: e.description }))
+      events.map(e => ({
+        start: e.start.toISOString(),
+        description: e.description,
+        shown: false
+      }))
     ));
+  }
+
+  function clearSchedule() {
+    localStorage.removeItem(STORAGE_KEY);
   }
 
   function showTodayReminder() {
@@ -411,18 +473,39 @@ document.addEventListener('DOMContentLoaded', () => {
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
+    const TWELVE_HOURS = 12 * 60 * 60 * 1000;
 
-    const todayEvents = events.filter(e => {
+    // «Зомби-напоминания»: показываем событие один раз,
+    // только если оно сегодня и не старше 12 часов.
+    let changed = false;
+    const due = [];
+    events.forEach(e => {
       const t = new Date(e.start);
-      return t >= startOfToday && t < endOfToday;
+      const today = t >= startOfToday && t < endOfToday;
+      const fresh = t <= now && (now - t) < TWELVE_HOURS;
+      if (today && fresh && !e.shown) {
+        e.shown = true;
+        changed = true;
+        due.push(e);
+      }
+      // Чистим просроченные события (старше 2 суток)
+      if ((now - t) > 2 * 24 * 60 * 60 * 1000) {
+        e.expired = true;
+        changed = true;
+      }
     });
-    if (todayEvents.length === 0) return;
+
+    if (changed) {
+      localStorage.setItem(STORAGE_KEY,
+        JSON.stringify(events.filter(e => !e.expired)));
+    }
+    if (due.length === 0) return;
 
     const banner = document.createElement('div');
     banner.className = 'today-reminder';
     banner.innerHTML = '<p>📅 Сегодня по плану: ' +
-      escapeHtml(todayEvents[0].description) +
-      (todayEvents.length > 1 ? ' (и ещё ' + (todayEvents.length - 1) + ')' : '') +
+      escapeHtml(due[0].description) +
+      (due.length > 1 ? ' (и ещё ' + (due.length - 1) + ')' : '') +
       '. Открой экран тренировки и повтори стих!</p>';
     inputScreen.prepend(banner);
   }
@@ -578,7 +661,7 @@ document.addEventListener('DOMContentLoaded', () => {
     showDownloadOffer(events, daysUntilExam);
     saveSchedule(events);
 
-    // Разбиваем на строки
+    // Разбиваем на строки (пустые строки отбрасываем)
     originalLines = text.split('\n').filter(line => line.trim() !== '');
 
     // Сохраняем стих в библиотеку (вместе с датой сдачи)
@@ -634,6 +717,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isAllHidden()) {
       statusMessage.textContent = '🎉 Отлично! Все слова скрыты — ты выучил текст!';
       nextBtn.disabled = true;
+      // Текст выучен — снимаем напоминания о нём («зомби-напоминания»)
+      clearSchedule();
     }
 
     saveCurrentPoem();
@@ -662,7 +747,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderTrainingText() {
     let result = '';
     for (let i = 0; i < originalLines.length; i++) {
-      const words = originalLines[i].trim().split(/\s+/);
+      const words = originalLines[i].trim().split(/\s+/).filter(w => w);
       const hideCount = hiddenCounts[i];
 
       for (let j = 0; j < words.length; j++) {
@@ -681,12 +766,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function isAllHidden() {
     for (let i = 0; i < originalLines.length; i++) {
-      const words = originalLines[i].trim().split(/\s+/);
+      const words = originalLines[i].trim().split(/\s+/).filter(w => w);
       if (words.length > 0 && hiddenCounts[i] < words.length) {
         return false;
       }
     }
     return true;
+  }
+
+  // Минимальная дата сдачи — сегодня (чтобы нельзя было построить
+  // расписание в прошлое)
+  if (examDateInput) {
+    const now = new Date();
+    const todayISO = now.getFullYear() + '-' +
+      String(now.getMonth() + 1).padStart(2, '0') + '-' +
+      String(now.getDate()).padStart(2, '0');
+    examDateInput.min = todayISO;
   }
 });
 
