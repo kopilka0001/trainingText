@@ -18,6 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const backBtn = document.getElementById('backBtn');
   const nextBtn = document.getElementById('nextBtn');
   const statusMessage = document.getElementById('statusMessage');
+  const exitTrainingBtn = document.getElementById('exitTrainingBtn');
 
   // Состояние текущей тренировки
   let currentPoemId = null;
@@ -38,7 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ===== ГЕЙТ ПО ВРЕМЕНИ ПРОЧТЕНИЯ =====
   // Идея: кнопка «Далее» заблокирована столько секунд, сколько нужно,
-  // чтобы прочитать видимый текст. Первый проход — расчёт по объёму текста,
+  // чтобы прочитать весь стих. Первый проход — расчёт по объёму текста,
   // дальше — персональное среднее фактических времён ЭТОГО шага.
   // Тайминги хранятся ОТДЕЛЬНО от библиотеки (GATE_KEY), а не в прогрессе.
   const GATE_KEY = 'gateTimings';       // персональные времена шагов
@@ -46,6 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const READING_WPM = 110;              // скорость чтения вслух, слов в минуту (коэффициент калибровки)
   const MIN_GATE_SEC = 2;               // минимальный гейт, сек
   const MAX_TIMINGS = 20;               // храним последние N замеров на шаг
+  const GATE_COEFF = 0.67;              // коэффициент времени гейта: 1.0 = полное, 0.67 = две трети, 0.5 = половина
 
   let gateTimerId = null;
   let gateScreenStart = 0;   // когда открылся экран полного текста
@@ -137,23 +139,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Минимальное время прочтения по объёму: слова / (слов в минуту) * 60 сек
   function readingSeconds(wordCount) {
-    return Math.max(MIN_GATE_SEC, Math.ceil(wordCount * 60 / READING_WPM));
+    return Math.max(MIN_GATE_SEC, Math.ceil(wordCount * 60 / READING_WPM * GATE_COEFF));
   }
 
-  // Гейт шага: среднее накопленных замеров ЭТОГО шага,
-  // а если замеров нет — расчёт по объёму видимого текста.
+  // Гейт шага: среднее накопленных замеров ЭТОГО шага (умноженное на коэффициент),
+  // а если замеров нет — расчёт по объёму ВСЕГО стихотворения:
+  // на каждом шаге человек произносит весь текст, а не только незакрытые слова.
   function gateSecondsForStep(stepIndex) {
-    if (!currentPoemId) return readingSeconds(countVisibleWords());
+    if (!currentPoemId) return readingSeconds(countAllWords());
     const avg = averageOf(getStepTimings(currentPoemId, stepIndex));
-    if (avg !== null) return Math.max(MIN_GATE_SEC, avg);
-    return readingSeconds(countVisibleWords());
+    if (avg !== null) return Math.max(MIN_GATE_SEC, Math.round(avg * GATE_COEFF));
+    return readingSeconds(countAllWords());
   }
 
   // Гейт экрана полного текста: среднее замеров «full» или расчёт по всему тексту
   function gateSecondsForFullText() {
     if (!currentPoemId) return readingSeconds(countAllWords());
     const avg = averageOf(getStepTimings(currentPoemId, 'full'));
-    if (avg !== null) return Math.max(MIN_GATE_SEC, avg);
+    if (avg !== null) return Math.max(MIN_GATE_SEC, Math.round(avg * GATE_COEFF));
     return readingSeconds(countAllWords());
   }
 
@@ -162,6 +165,7 @@ document.addEventListener('DOMContentLoaded', () => {
       clearInterval(gateTimerId);
       gateTimerId = null;
     }
+    if (nextBtn) nextBtn.classList.remove('gate-waiting');
   }
 
   // Запуск отсчёта на кнопке: неактивна с обратным отсчётом,
@@ -175,11 +179,13 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     btn.disabled = true;
+    btn.classList.add('gate-waiting');
     let remaining = seconds;
     const tick = () => {
       if (remaining <= 0) {
         cancelGate();
         btn.disabled = false;
+        btn.classList.remove('gate-waiting');
         btn.textContent = activeLabel;
         return;
       }
@@ -563,6 +569,12 @@ document.addEventListener('DOMContentLoaded', () => {
     [inputScreen, libraryScreen, readOnceScreen, trainingScreen].forEach(s => {
       if (s) s.classList.add('hidden');
     });
+    // Уход с экрана тренировки: гасим отсчёт и возвращаем «Далее» в исходный вид
+    cancelGate();
+    if (nextBtn) {
+      nextBtn.disabled = false;
+      nextBtn.textContent = NEXT_LABEL;
+    }
     if (name) name.classList.remove('hidden');
   }
 
@@ -1095,6 +1107,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     saveCurrentPoem();
   });
+
+  // Кнопка «Закончить тренировку»: сохраняем прогресс и выходим в «Мои стихи».
+  // Тренировка остаётся на текущем шаге — вернётесь и продолжите с того же места.
+  if (exitTrainingBtn) {
+    exitTrainingBtn.addEventListener('click', () => {
+      cancelGate();
+      saveCurrentPoem();
+      showScreen(libraryScreen);
+    });
+  }
 
   function updateBackButton() {
     backBtn.disabled = history.length === 0;
