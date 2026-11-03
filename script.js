@@ -32,9 +32,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // Адрес страницы импорта/экспорта Google Календаря
   const GCAL_IMPORT_URL = 'https://calendar.google.com/calendar/u/0/r/settings/export';
 
+  // ===== КЛЮЧИ ХРАНИЛИЩА (объявлены ДО всего, что их использует) =====
+  const LIBRARY_KEY = 'poemLibrary';
+  const STORAGE_KEY = 'trainingSchedule';
+
   // ===== ТИХИЕ ЧАСЫ (не беспокоим с 21:00 до 8:00) =====
-  const QUIET_HOURS = { from: 21, to: 8 }; // не беспокоить с 21:00 до 8:00
-  const FALLBACK_MORNING = 10;             // куда переносим ночные события
+  const QUIET_HOURS = { from: 21, to: 8 };
+  const FALLBACK_MORNING = 10;
 
   function isAwake(d) {
     const h = d.getHours();
@@ -48,9 +52,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const fixed = new Date(d);
     fixed.setSeconds(0, 0);
     if (fixed.getHours() < QUIET_HOURS.to) {
-      fixed.setHours(FALLBACK_MORNING, 0, 0, 0);   // ночь → сегодня утром
+      fixed.setHours(FALLBACK_MORNING, 0, 0, 0);
     } else {
-      fixed.setDate(fixed.getDate() + 1);          // поздний вечер → завтра утром
+      fixed.setDate(fixed.getDate() + 1);
       fixed.setHours(FALLBACK_MORNING, 0, 0, 0);
     }
     return fixed;
@@ -58,12 +62,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Экранирование HTML-символов
   function escapeHtml(s) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   // ===== БИБЛИОТЕКА СТИХОВ =====
-
-  const LIBRARY_KEY = 'poemLibrary';
 
   function loadPoems() {
     try {
@@ -132,14 +134,170 @@ document.addEventListener('DOMContentLoaded', () => {
     return 'сдача была ' + dateStr;
   }
 
+  // ===== РЕЗЕРВНАЯ КОПИЯ: экспорт и импорт библиотеки =====
+  // Библиотека живёт в localStorage и НЕ удаляется при обновлении версии.
+  // Но localStorage привязан к адресу сайта: если открыть сайт по другому
+  // адресу (с www или без, по http вместо https) — библиотека будет «другой».
+  // Плюс данные могут пропасть при очистке браузера или в режиме инкогнито.
+  // Поэтому даём пользователю явный экспорт/импорт файла.
+
+  function downloadFile(url, filename) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  function exportLibrary() {
+    const poems = loadPoems();
+    if (poems.length === 0) {
+      alert('Библиотека пуста — пока нечего сохранять.');
+      return;
+    }
+    const data = JSON.stringify(poems, null, 2);
+    const blob = new Blob([data], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const d = new Date();
+    const stamp = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    downloadFile(url, 'moi-stihi-backup-' + stamp + '.json');
+  }
+
+  function importLibrary(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      let imported;
+      try {
+        imported = JSON.parse(reader.result);
+      } catch (e) {
+        alert('Не удалось прочитать файл: это не резервная копия приложения.');
+        return;
+      }
+      if (!Array.isArray(imported)) {
+        alert('Файл не похож на резервную копию библиотеки.');
+        return;
+      }
+      // Оставляем только корректные записи
+      const clean = imported.filter(p =>
+        p && Array.isArray(p.lines) && p.lines.length > 0 && Array.isArray(p.hiddenCounts)
+      ).map(p => ({
+        id: String(p.id || Date.now()),
+        title: String(p.title || makeTitle(p.lines)),
+        lines: p.lines,
+        hiddenCounts: p.hiddenCounts,
+        stepIndex: Number(p.stepIndex) || 0,
+        examDate: p.examDate || null,
+        createdAt: Number(p.createdAt) || Date.now(),
+        updatedAt: Number(p.updatedAt) || Date.now()
+      }));
+
+      const current = loadPoems();
+      const question = current.length
+        ? 'Найдено стихов в файле: ' + clean.length + '.\n\nЗаменить текущую библиотеку (' + current.length + ' стихов) на импортируемую?'
+        : 'Импортировать ' + clean.length + ' стихов?';
+      if (!confirm(question)) return;
+
+      savePoems(clean);
+      renderLibrary();
+      alert('Импорт завершён: ' + clean.length + ' стихов.');
+    };
+    reader.readAsText(file);
+  }
+
+  // Панель резервной копии над списком (пересоздаётся при каждом рендере)
+  function buildBackupToolbar() {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'backup-toolbar';
+
+    const exportBtn = document.createElement('button');
+    exportBtn.textContent = '💾 Сохранить в файл';
+    exportBtn.className = 'backup-btn';
+    exportBtn.title = 'Скачать резервную копию всех стихов с прогрессом';
+    exportBtn.onclick = exportLibrary;
+    toolbar.appendChild(exportBtn);
+
+    const importBtn = document.createElement('button');
+    importBtn.textContent = '📂 Загрузить из файла';
+    importBtn.className = 'backup-btn';
+    importBtn.title = 'Восстановить библиотеку из резервной копии';
+    importBtn.onclick = () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,application/json';
+      input.onchange = () => {
+        if (input.files && input.files[0]) importLibrary(input.files[0]);
+      };
+      input.click();
+    };
+    toolbar.appendChild(importBtn);
+
+    const note = document.createElement('span');
+    note.className = 'backup-note';
+    note.textContent = 'данные хранятся в этом браузере';
+    toolbar.appendChild(note);
+
+    return toolbar;
+  }
+
+  // Указать дату сдачи у уже существующего стиха
+  function setExamDateForPoem(id) {
+    const poems = loadPoems();
+    const p = poems.find(x => x.id === id);
+    if (!p) return;
+
+    const value = prompt(
+      'Дата сдачи в формате ГГГГ-ММ-ДД (например, 2026-11-20).\nПусто — отменить.',
+      p.examDate || ''
+    );
+    if (value === null) return;
+
+    const trimmed = value.trim();
+    if (trimmed === '') {
+      p.examDate = null;
+      savePoems(poems);
+      renderLibrary();
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      alert('Нужен формат ГГГГ-ММ-ДД, например 2026-11-20.');
+      return;
+    }
+    const examDate = new Date(trimmed + 'T00:00:00');
+    if (isNaN(examDate) || examDate < new Date(new Date().setHours(0, 0, 0, 0))) {
+      alert('Дата некорректная или уже прошла.');
+      return;
+    }
+
+    p.examDate = trimmed;
+    savePoems(poems);
+
+    // Пересобираем и сохраняем расписание напоминаний
+    const { events } = buildSchedule(examDate);
+    saveSchedule(events);
+
+    // Сразу предлагаем календарь
+    const icsContent = generateICS(events);
+    const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+    downloadFile(URL.createObjectURL(blob), 'training-schedule.ics');
+
+    renderLibrary();
+  }
+
   function renderLibrary() {
     if (!poemListEl) return;
     const poems = loadPoems();
     poemListEl.innerHTML = '';
 
+    // Панель резервной копии — всегда сверху списка
+    poemListEl.appendChild(buildBackupToolbar());
+
     if (poems.length === 0) {
-      poemListEl.innerHTML =
-        '<p class="calendar-message">Пока пусто. Нажмите «➕ Новый стих», чтобы начать!</p>';
+      const empty = document.createElement('p');
+      empty.className = 'calendar-message';
+      empty.textContent = 'Пока пусто. Нажмите «➕ Новый стих», чтобы начать!';
+      poemListEl.appendChild(empty);
       return;
     }
 
@@ -155,10 +313,8 @@ document.addEventListener('DOMContentLoaded', () => {
       link.href = '#';
       link.className = 'poem-link';
 
-      // Основная строка статуса
       let statusLine = st.icon + ' ' + st.label + ' · ' + st.pct + '%';
 
-      // Сколько повторений осталось и когда сдача
       const left = remainingRepeats(p);
       if (left !== null) {
         if (left > 0) {
@@ -187,6 +343,16 @@ document.addEventListener('DOMContentLoaded', () => {
         repeat.onclick = () => repeatPoem(p.id);
         item.appendChild(repeat);
       }
+
+      // Кнопка «Дата сдачи» — назначить или изменить
+      const dateBtn = document.createElement('button');
+      dateBtn.textContent = '📅';
+      dateBtn.className = 'poem-date';
+      dateBtn.title = p.examDate
+        ? 'Изменить дату сдачи (' + p.examDate + ')'
+        : 'Указать дату сдачи — создадутся напоминания о повторении';
+      dateBtn.onclick = () => setExamDateForPoem(p.id);
+      item.appendChild(dateBtn);
 
       const del = document.createElement('button');
       del.textContent = '🗑';
@@ -250,7 +416,7 @@ document.addEventListener('DOMContentLoaded', () => {
     hiddenCounts = originalLines.map(() => 0);
     history = [];
     stepIndex = 0;
-    saveCurrentPoem(); // сброс сразу сохраняем
+    saveCurrentPoem();
 
     showScreen(trainingScreen);
     renderTrainingText();
@@ -279,12 +445,13 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ===== МИГРАЦИЯ ПОСЛЕ ОБНОВЛЕНИЯ =====
-  // При выходе новой версии поднимаем SCHEMA_VERSION и один раз
-  // пересчитываем сохранённое расписание по новым правилам (тихие часы).
+  // ВАЖНО: миграция касается только расписания напоминаний (STORAGE_KEY).
+  // Библиотеку стихов (LIBRARY_KEY) она НЕ трогает — никогда.
   const SCHEMA_VERSION = 2;
 
   function migrate() {
     if (Number(localStorage.getItem('schemaVersion') || 1) >= SCHEMA_VERSION) return;
+
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       try {
@@ -302,7 +469,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Стартовый экран: библиотека, если стихи уже есть
-  // (миграция расписания выполняется ДО первого показа напоминаний)
   migrate();
   if (libraryScreen && loadPoems().length > 0) {
     openLibrary();
@@ -344,17 +510,6 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/;/g, '\\;')
       .replace(/,/g, '\\,')
       .replace(/\r?\n/g, '\\n');
-  }
-
-  // Скачивание .ics файла (используется несколькими кнопками)
-  function downloadIcs(url) {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'training-schedule.ics';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
   // Ссылка-шаблон события для Google Календаря
@@ -418,8 +573,7 @@ document.addEventListener('DOMContentLoaded', () => {
         events.push({ start, end, description: 'Экстренная схема: ' + labels[index] });
       });
     } else {
-      // Стандартная схема по дням (18:00 — внутри окна бодрствования,
-      // но clamp подстрахует при изменении QUIET_HOURS)
+      // Стандартная схема по дням
       const intervals = calculateIntervals(daysUntilExam);
       let dayOffset = 0;
       intervals.forEach((interval, index) => {
@@ -447,7 +601,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- Напоминание при открытии приложения ---
-  const STORAGE_KEY = 'trainingSchedule';
 
   function saveSchedule(events) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(
@@ -475,8 +628,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
     const TWELVE_HOURS = 12 * 60 * 60 * 1000;
 
-    // «Зомби-напоминания»: показываем событие один раз,
-    // только если оно сегодня и не старше 12 часов.
     let changed = false;
     const due = [];
     events.forEach(e => {
@@ -488,7 +639,6 @@ document.addEventListener('DOMContentLoaded', () => {
         changed = true;
         due.push(e);
       }
-      // Чистим просроченные события (старше 2 суток)
       if ((now - t) > 2 * 24 * 60 * 60 * 1000) {
         e.expired = true;
         changed = true;
@@ -585,7 +735,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ? '📥 Добавить все тренировки в Календарь'
       : '📥 Скачать календарь тренировок';
     downloadButton.classList.add('download-button');
-    downloadButton.onclick = () => downloadIcs(url);
+    downloadButton.onclick = () => downloadFile(url, 'training-schedule.ics');
     offer.appendChild(downloadButton);
 
     if (!isIOS) {
@@ -593,7 +743,7 @@ document.addEventListener('DOMContentLoaded', () => {
       importButton.textContent = '🌐 Импорт через сайт Google Календаря';
       importButton.classList.add('download-button');
       importButton.onclick = () => {
-        downloadIcs(url);
+        downloadFile(url, 'training-schedule.ics');
         window.open(GCAL_IMPORT_URL, '_blank');
       };
       offer.appendChild(importButton);
@@ -633,6 +783,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Кнопка «Начать учить»
+  // Дата сдачи теперь НЕОБЯЗАТЕЛЬНА: можно начать учить без неё.
+  // Время (расписание) учитывается только для напоминаний о повторении.
   startBtn.addEventListener('click', () => {
     const text = userText.value.trim();
     const dateValue = examDateInput.value;
@@ -641,30 +793,34 @@ document.addEventListener('DOMContentLoaded', () => {
       alert('Пожалуйста, вставьте текст!');
       return;
     }
-    if (!dateValue) {
-      alert('Пожалуйста, укажите дату сдачи!');
-      return;
+
+    let examDate = null;
+    if (dateValue) {
+      examDate = new Date(dateValue + 'T00:00:00');
+      if (isNaN(examDate)) {
+        alert('Некорректная дата!');
+        return;
+      }
+      if (examDate < new Date(new Date().setHours(0, 0, 0, 0))) {
+        alert('Дата сдачи уже прошла!');
+        return;
+      }
     }
 
-    const examDate = new Date(dateValue + 'T00:00:00');
-    if (isNaN(examDate)) {
-      alert('Некорректная дата!');
-      return;
+    // Расписание строим ТОЛЬКО если дата указана
+    if (examDate) {
+      const { events, daysUntilExam } = buildSchedule(examDate);
+      showDownloadOffer(events, daysUntilExam);
+      saveSchedule(events);
+    } else {
+      const oldOffer = document.getElementById('calendarOffer');
+      if (oldOffer) oldOffer.remove();
     }
-    if (examDate < new Date(new Date().setHours(0, 0, 0, 0))) {
-      alert('Дата сдачи уже прошла!');
-      return;
-    }
-
-    // Схема повторений + предложение скачать календарь
-    const { events, daysUntilExam } = buildSchedule(examDate);
-    showDownloadOffer(events, daysUntilExam);
-    saveSchedule(events);
 
     // Разбиваем на строки (пустые строки отбрасываем)
     originalLines = text.split('\n').filter(line => line.trim() !== '');
 
-    // Сохраняем стих в библиотеку (вместе с датой сдачи)
+    // Сохраняем стих в библиотеку
     currentPoemId = String(Date.now());
     const poems = loadPoems();
     poems.push({
@@ -673,7 +829,7 @@ document.addEventListener('DOMContentLoaded', () => {
       lines: originalLines,
       hiddenCounts: originalLines.map(() => 0),
       stepIndex: 0,
-      examDate: dateValue, // запоминаем дату сдачи
+      examDate: dateValue || null, // дата может отсутствовать
       createdAt: Date.now(),
       updatedAt: Date.now()
     });
@@ -687,6 +843,14 @@ document.addEventListener('DOMContentLoaded', () => {
     inputScreen.classList.add('hidden');
     readOnceScreen.classList.remove('hidden');
     fullTextDisplay.textContent = text;
+
+    if (!examDate) {
+      const note = document.createElement('p');
+      note.className = 'calendar-message';
+      note.textContent = 'Дата сдачи не указана — напоминания о повторении не созданы. ' +
+        'Назначить дату можно позже: кнопка 📅 рядом со стихом в библиотеке.';
+      readOnceScreen.prepend(note);
+    }
   });
 
   // Кнопка «Готово, дальше»
@@ -774,8 +938,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return true;
   }
 
-  // Минимальная дата сдачи — сегодня (чтобы нельзя было построить
-  // расписание в прошлое)
+  // Минимальная дата сдачи — сегодня
   if (examDateInput) {
     const now = new Date();
     const todayISO = now.getFullYear() + '-' +
