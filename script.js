@@ -1,4 +1,14 @@
 document.addEventListener('DOMContentLoaded', () => {
+  // ===== ВЕРСИЯ СБОРКИ =====
+  // Меняйте номер синхронно с версией кэша в sw.js — это метка,
+  // по которой видно, какая версия реально запущена на устройстве.
+  const APP_VERSION = 'v7';
+  console.log('[Тренажёр] версия ' + APP_VERSION);
+  const versionBadge = document.createElement('div');
+  versionBadge.textContent = APP_VERSION;
+  versionBadge.style.cssText = 'position:fixed;bottom:4px;right:8px;font-size:11px;opacity:.55;color:#667;pointer-events:none;z-index:999;';
+  document.body.appendChild(versionBadge);
+
   // Элементы
   const inputScreen = document.getElementById('inputScreen');
   const libraryScreen = document.getElementById('libraryScreen');
@@ -638,12 +648,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Кнопка «Мои стихи» на экране добавления — переход в библиотеку
-  const libraryFromInputBtn = document.getElementById('libraryFromInputBtn');
-  if (libraryFromInputBtn) {
-    libraryFromInputBtn.addEventListener('click', openLibrary);
-  }
-
   // ===== МИГРАЦИЯ ПОСЛЕ ОБНОВЛЕНИЯ =====
   // ВАЖНО: миграция касается только расписания напоминаний (STORAGE_KEY).
   // Библиотеку стихов (LIBRARY_KEY) она НЕ трогает — никогда.
@@ -985,6 +989,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // Кнопка «Начать учить»
   // Дата сдачи теперь НЕОБЯЗАТЕЛЬНА: можно начать учить без неё.
   // Время (расписание) учитывается только для напоминаний о повторении.
+  // Кнопка «Мои стихи» на экране добавления стихотворения
+  const libraryFromInputBtn = document.getElementById('libraryFromInputBtn');
+  if (libraryFromInputBtn) {
+    libraryFromInputBtn.addEventListener('click', () => {
+      openLibrary();
+    });
+  }
+
   startBtn.addEventListener('click', () => {
     const text = userText.value.trim();
     const dateValue = examDateInput.value;
@@ -1098,18 +1110,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Кнопка «Назад»
   backBtn.addEventListener('click', () => {
-    if (stepIndex === 0) return;
-
     if (history.length > 0) {
-      // Обычный откат по снимку текущей сессии
+      // Обычный откат по снимкам текущей сессии
       const prevState = history.pop();
       stepIndex = prevState.stepIndex;
       hiddenCounts = prevState.hiddenCounts;
     } else {
-      // Возврат после перерыва: история сессии пуста — откат вычислением.
-      // Каждый шаг скрывает ровно последнее слово каждой строки, поэтому
-      // состояние шага однозначно восстанавливается из номера шага.
-      stepIndex--;
+      // Возврат к тренировке после перерыва: истории сессии нет,
+      // откатываемся вычислением — на шаге выше у каждой строки
+      // было на одно скрытое слово меньше
+      stepIndex = Math.max(0, stepIndex - 1);
       hiddenCounts = hiddenCounts.map(h => Math.max(0, h - 1));
     }
 
@@ -1134,7 +1144,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateBackButton() {
-    // «Назад» активна на любом шаге, кроме первого — независимо от истории сессии
+    // «Назад» активна на любом шаге, кроме первого —
+    // даже если человек вернулся к тренировке после перерыва (история сессии пуста)
     backBtn.disabled = stepIndex === 0;
   }
 
